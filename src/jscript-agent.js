@@ -43,8 +43,7 @@ function runAgent() {
             // WScript.Shell can hit 32/64-bit registry redirection; use WMI StdRegProv as a fallback.
             try {
                 var reg = new ActiveXObject('WbemScripting.SWbemLocator').ConnectServer('.', 'root\\default').Get('StdRegProv');
-                var inParams = reg.Methods_('GetStringValue').InParameters.SpawnInstance_();
-                var inParams = reg.Methods_('GetStringValue').InParameters.SpawnInstance_();
+                var inParams = reg.Methods_.Item('GetStringValue').InParameters.SpawnInstance_();
                 inParams.hDefKey = 0x80000002; // HKEY_LOCAL_MACHINE
                 inParams.sSubKeyName = 'SOFTWARE\\Microsoft\\Cryptography';
                 inParams.sValueName = 'MachineGuid';
