@@ -76,22 +76,6 @@ Spoken against the HTTP relay (see the `http-relay` worker — the beacon leg an
 | `0x0B` | Upgrade | Re-arms the process in place. Payload (ASCII text after the opcode): `!d=`/`!e=` control lines, `NAME=value` env-var lines, a blank line, then `stage1b64\nblobB64`. The agent pins `COMPLUS_Version` itself first (v2.0.50727 on Win7 / build 7600-7601, else v4.0.30319 — the same OS rule the C2 gadget compiler uses), applies the env lines, optionally deserializes the stage-1 blob, then deserializes the main gadget blob (plain drive, or script-driven delegate chain when `!d=1` + entry via `!e=`). Replies u32 as hex: `0` = chain completed, `1` = failed (log carries the message). |
 | other | unknown | Replies u32 `2`. |
 
-## Using it from C2
-
-Add an Agents-table row (the C2 seeds one automatically):
-
-- **Tags:** `windows, i386, x86_64, aarch64, http` — one arch-agnostic row; the agent derives the
-  machine architecture at runtime (WMI `Win32_Processor.Architecture` with the env chain as
-  fallback). The `http` transport tag is what the Windows-Infection generator resolves
-  (`[windows, http]`), disjoint from the `ws`+`pic` rows the inject pipelines use.
-- **URL:** the direct download URL of this file, e.g.
-  `https://raw.githubusercontent.com/mrzaxaryan/jscript-agent/main/agent/jscript-agent.js`
-  (fetched at generation time via the relay `/proxy`, then direct; raw.githubusercontent sends
-  CORS `*` so the direct fetch works from the browser).
-
-The generator embeds the fetched text verbatim into the master and runs the JScript obfuscation
-pass over the whole thing, so this file must stay valid, self-contained JScript.
-
 ## Local verification
 
 The agent runs dual-host by design — cscript is the verification path (no window, echo visible):
