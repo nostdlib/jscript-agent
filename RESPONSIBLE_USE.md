@@ -9,6 +9,8 @@ jscript-agent is developed and maintained for the following legitimate purposes:
 - **Capture The Flag (CTF) Competitions** -- Providing a reference for techniques commonly encountered in offensive security competitions held in controlled, sanctioned environments
 - **Academic and Independent Research** -- Enabling security researchers to study, document, and develop defenses against real-world offensive techniques in a transparent, open-source context
 
+Detection engineering against this agent should start with [DEFENSE.md](DEFENSE.md).
+
 ## Prohibited Uses
 
 The following uses of this software are strictly prohibited:

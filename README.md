@@ -88,6 +88,14 @@ Expected: with `H_URL` unset, one `beacon endpoint not set` line and a clean exi
 relay (`wrangler dev` in the `http-relay` repo), the beacon appears in `/status` with its parsed
 `X-Agent-*` identity and answers queued commands.
 
+## For defenders
+
+[DEFENSE.md](DEFENSE.md) is the detection guide for this agent: network and host indicators
+derived from the source (with line references), a Suricata rule and a YARA rule, a MITRE ATT&CK
+mapping, a forensic triage checklist, and an educational note on why a pure-JScript implant is
+structurally HTTP-only — the ES3/WSH COM surface exposes no socket API, so long-poll HTTP via
+MSXML is the whole realistic C2 channel short of dropping to a helper process.
+
 ## License
 
 MIT — see [LICENSE](LICENSE). Usage is governed by [RESPONSIBLE_USE.md](RESPONSIBLE_USE.md) and

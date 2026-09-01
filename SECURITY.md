@@ -46,6 +46,11 @@ than opening a public issue.
 - We will credit you in the fix (unless you prefer to remain anonymous)
 - We ask that you do not publicly disclose the vulnerability until a fix is available
 
+## Detection Guidance
+
+Defensive detection guidance for this agent — network and host indicators, hunting rules, a MITRE
+ATT&CK mapping, and forensic triage steps — is maintained in [DEFENSE.md](DEFENSE.md).
+
 ## Scope
 
 The following are considered in scope for security reports:
