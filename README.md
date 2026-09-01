@@ -20,7 +20,7 @@ The agent carries **no baked configuration**. Its single input is the process en
 
 Everything else (identity, machine architecture, OS version) is derived on the target at runtime.
 `X-Agent-Capabilities` always ships `0800000000000000` (the
-`UpgradeUsingInsecureBinaryDeserialization` bit, category 3) — every build of this agent carries
+`ExploitInsecureDeserialization` bit, category 3) — every build of this agent carries
 the UpgradeNetFramework arm.
 
 ## Host contract
