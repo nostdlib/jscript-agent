@@ -6,7 +6,11 @@ function runAgent() {
     function ensureShell() {
         if (!shell) shell = new ActiveXObject('WScript.Shell');
     }
-    function log(line) { if (CAN_ECHO) WScript.Echo(line); if (typeof dbg != 'undefined') dbg(line); }
+    function log(line) {
+        if (CAN_ECHO) WScript.Echo(line);
+        else if (typeof alert != 'undefined') alert(line);
+        if (typeof dbg != 'undefined') dbg(line);
+    }
     function readEnv(name) {
         ensureShell();
         var value = shell.ExpandEnvironmentStrings('%' + name + '%');
@@ -50,16 +54,6 @@ function runAgent() {
                 var outParams = reg.ExecMethod_('GetStringValue', inParams);
                 if (outParams.ReturnValue == 0) guid = ('' + outParams.sValue).toLowerCase();
             } catch (e2) {}
-            if (!GUID_RE.test(guid)) {
-                // SWbemLocator can be unavailable/unreliable under mshta; shell out to reg.exe instead.
-                try {
-                    var exec = shell.Exec(shell.ExpandEnvironmentStrings('%ComSpec%') + ' /c reg query HKLM\\SOFTWARE\\Microsoft\\Cryptography /v MachineGuid 2>nul');
-                    var outText = '';
-                    while (!exec.StdOut.AtEndOfStream) outText += exec.StdOut.ReadLine() + '\n';
-                    var m = /REG_SZ\s+([0-9a-fA-F-]{36})/.exec(outText);
-                    if (m) guid = m[1].toLowerCase();
-                } catch (e3) {}
-            }
         }
         return guid;
     }
