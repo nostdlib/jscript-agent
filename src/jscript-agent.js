@@ -236,7 +236,9 @@ function runAgent() {
             for (var i = 0; i < identityHeaders.length; i++) {
                 try { xhr.setRequestHeader(identityHeaders[i][0], identityHeaders[i][1]); } catch (e3) {}
             }
+            log('POST start (' + pendingReplies.length + ' queued replies)');
             xhr.send(pendingReplies.length ? buildBodyStream(pendingReplies) : '');
+            log('POST end, status ' + xhr.status);
         } catch (e) {
             log('beacon failed: ' + (e && e.message ? e.message : e));
             return 'fail';
