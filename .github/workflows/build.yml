@@ -1,0 +1,164 @@
+name: Build & Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - "**"
+
+concurrency:
+  group: ci-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  # ═════════════════════════════════════════════════════════════════════════
+  # Build — syntax-check the single static agent file
+  # ═════════════════════════════════════════════════════════════════════════
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Syntax check (node --check)
+        run: |
+          node --check src/jscript-agent.js
+          echo "syntax OK"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-jscript
+          retention-days: 1
+          path: src/
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # Test — cscript smoke run (H_URL unset ⇒ one log line, clean 'fail')
+  # ═════════════════════════════════════════════════════════════════════════
+
+  test-windows-cscript:
+    needs: build
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with: { name: build-jscript, path: src }
+      - name: Test agent (cscript, H_URL unset)
+        shell: pwsh
+        run: |
+          Copy-Item src/jscript-agent.js master.js
+          Add-Content -Path master.js -Value 'WScript.Echo("result: " + runAgent());'
+          $output = (cscript //nologo master.js 2>&1 | Out-String)
+          Write-Host $output
+          if (-not ($output -match "beacon endpoint not set")) { Write-Host "FAILED: expected 'beacon endpoint not set'"; exit 1 }
+          if (-not ($output -match "result: fail")) { Write-Host "FAILED: expected 'result: fail'"; exit 1 }
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # Gate — single required check for branch protection
+  # ═════════════════════════════════════════════════════════════════════════
+
+  all-tests:
+    if: always()
+    needs:
+      - build
+      - test-windows-cscript
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check all test results
+        run: |
+          echo "Build: ${{ needs.build.result }}"
+          results=(
+            "${{ needs.build.result }}"
+            "${{ needs.test-windows-cscript.result }}"
+          )
+          for r in "${results[@]}"; do
+            if [ "$r" != "success" ]; then
+              echo "One or more jobs failed or were cancelled"
+              exit 1
+            fi
+          done
+          echo "All tests passed"
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # Preview Release — publish rolling pre-release from main
+  # ═════════════════════════════════════════════════════════════════════════
+  preview-build:
+    if: github.ref == 'refs/heads/main'
+    needs: [all-tests]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Syntax check (node --check)
+        run: |
+          node --check src/jscript-agent.js
+          echo "syntax OK"
+
+      - name: Collect release files
+        run: |
+          mkdir -p artifacts
+          cp src/jscript-agent.js artifacts/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: preview-jscript
+          retention-days: 1
+          path: artifacts/
+
+  preview-release:
+    if: github.ref == 'refs/heads/main'
+    needs: [preview-build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          pattern: preview-*
+
+      - name: Collect release files
+        run: |
+          mkdir -p release-files
+          find artifacts -type f -exec cp {} release-files/ \;
+          echo "Release files:"
+          ls -lh release-files/
+
+      - name: Create or update preview release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="preview"
+          TITLE="Preview (${GITHUB_SHA::7})"
+          BODY="Automated preview release from \`main\` branch.
+
+          **Commit:** [\`${GITHUB_SHA::7}\`](https://github.com/${{ github.repository }}/commit/${GITHUB_SHA})
+          **Date:** $(date -u '+%Y-%m-%d %H:%M UTC')
+
+          > This is a rolling pre-release that updates on every merge to \`main\`.
+          > For stable releases, see tagged versions (\`v*\`)."
+
+          # Delete existing preview release and tag if they exist
+          gh release delete "$TAG" --yes 2>/dev/null || true
+          git push origin ":refs/tags/$TAG" 2>/dev/null || true
+
+          # Create fresh pre-release
+          gh release create "$TAG" \
+            --title "$TITLE" \
+            --notes "$BODY" \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            release-files/*
