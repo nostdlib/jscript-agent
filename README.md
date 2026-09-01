@@ -1,7 +1,7 @@
 # jscript-agent
 
 The JScript HTTP-beacon agent for the [C2](https://github.com/mrzaxaryan/C2) platform — a single
-static `.js` file ([`agent/jscript-agent.js`](agent/jscript-agent.js)) that turns its host process
+static `.js` file ([`src/jscript-agent.js`](src/jscript-agent.js)) that turns its host process
 (mshta in deployment, cscript for verification) into an implant with no payload download, no CLR
 requirement, and no bitness constraint of its own.
 
