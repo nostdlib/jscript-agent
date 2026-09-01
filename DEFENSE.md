@@ -15,7 +15,7 @@ intended to run inside `mshta.exe` in deployment (a "master" wrapper sets `H_URL
 2. Builds an identity header set once — hostname, username, OS version/build, CPU arch, and a UUID
    taken from `HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid` ([:46-81](src/jscript-agent.js#L46-L81)).
 3. Long-poll POSTs the relay in a loop via `MSXML2.ServerXMLHTTP` ([:142-167](src/jscript-agent.js#L142-L167)).
-4. Dispatches one of three command opcodes: `0x0A` Exit, `0x0B` Upgrade — in-process payload
+4. Dispatches one of three command opcodes: `0x0A` Exit, `0x0B` UpgradeNetFramework — in-process payload
    execution via `BinaryFormatter` insecure deserialization ([:90-134](src/jscript-agent.js#L90-L134)) —
    and anything else returns u32 `2`.
 
@@ -45,7 +45,7 @@ This header set is the single highest-confidence signature — ordinary software
 **Body shape.** Both directions are optional-whitespace-stripped, lowercase, even-length hex
 ([bytesToHex :15-19](src/jscript-agent.js#L15-L19), [:162](src/jscript-agent.js#L162)); bodies match
 `^([0-9a-f]{2})*$`. Request bodies are almost always empty or exactly 8 hex chars (a u32 reply);
-Upgrade command *responses* are large (the base64 payload hex-doubles, so response ≫ request is
+UpgradeNetFramework command *responses* are large (the base64 payload hex-doubles, so response ≫ request is
 the asymmetric fingerprint of a payload push).
 
 **Cadence.** The relay holds each request 20–30 s; the agent re-POSTs immediately on an empty
@@ -57,7 +57,7 @@ near-continuous single-destination occupancy from one process.
 connection (MSXML option 1), deliberately ignoring any configured proxy. On forced-proxy networks
 this shows up as direct egress attempts from `mshta.exe`.
 
-**No second-stage fetch.** The Upgrade payload rides the same in-band beacon POST (the README's
+**No second-stage fetch.** The UpgradeNetFramework payload rides the same in-band beacon POST (the README's
 "no payload download"). There is no follow-on URL to catch — host-side detection and the relay
 endpoint are the only choke points.
 
@@ -84,7 +84,7 @@ specific relay hostname) is a useful pivot, though not conclusive on its own.
 
 **Module loads (Sysmon EID 7).** `mshta.exe` / `cscript.exe` loading `clr.dll` / `mscorwks.dll` /
 `mscorlib.ni.dll` — the CLR is hosted via COM the moment any `System.*` object is created
-([:36-45](src/jscript-agent.js#L36-L45)), and the Upgrade arm depends on it. A script host with a
+([:36-45](src/jscript-agent.js#L36-L45)), and the UpgradeNetFramework arm depends on it. A script host with a
 hosted CLR is a strong anomaly unless the box legitimately runs script-driven .NET tooling.
 
 **AMSI content (Win10+).** The JScript engine inside mshta/cscript feeds script source to AMSI.
@@ -101,7 +101,7 @@ quality is the consuming C2's concern — treat obfuscated variants as expected.
 host inventory from a script host is itself a signal, independent of the C2.
 
 **Process environment (forensics).** The live process env block should contain `H_URL`
-([:137](src/jscript-agent.js#L137)) and, after an Upgrade, `COMPLUS_Version` = `v2.0.50727`
+([:137](src/jscript-agent.js#L137)) and, after an UpgradeNetFramework, `COMPLUS_Version` = `v2.0.50727`
 (Win7 / build 7600–7601) or `v4.0.30319` ([:64-66](src/jscript-agent.js#L64-L66), [:106](src/jscript-agent.js#L106)).
 These are per-process and invisible to default telemetry — grab them from a memory dump or
 `Get-Process ... | % { $_.StartInfo.EnvironmentVariables }`-style collection before the process dies.
@@ -133,14 +133,14 @@ rule JScript_Agent_Beacon
 | T1012 Query Registry | `MachineGuid` read for `X-Agent-Uuid` |
 | T1082 System Information Discovery | WMI OS-version and CPU-arch queries |
 | T1041 Exfiltration Over C2 Channel | Command replies returned in beacon POST bodies |
-| T1620 Reflective Code Loading (nearest fit) | Upgrade arm: in-memory `BinaryFormatter` gadget execution, no file written |
+| T1620 Reflective Code Loading (nearest fit) | UpgradeNetFramework arm: in-memory `BinaryFormatter` gadget execution, no file written |
 | T1547.x Autostart Execution | On-logon re-delivery — implemented by the master, not this file |
 
 ## 5. Forensic triage checklist (suspected host)
 
 1. Running `mshta.exe`/`cscript.exe` with an active single-destination HTTPS session → capture its
    command line, parent chain, and network connections for that PID.
-2. Dump the process environment: `H_URL` names the relay; `COMPLUS_Version` proves an Upgrade ran.
+2. Dump the process environment: `H_URL` names the relay; `COMPLUS_Version` proves an UpgradeNetFramework ran.
 3. Pull Sysmon/EDR history for that PID: CLR module loads, `MachineGuid` read, WMI queries.
 4. Search proxy/TLS-inspection logs for `X-Agent-*` headers — `X-Agent-Uuid` is the `MachineGuid`,
    so one query inventories every beaconing host in the environment and ties captures to hosts.
@@ -165,7 +165,7 @@ next escalation step must look like:
 - **No sockets via the CLR either.** The `System.*` objects this agent uses work because a subset
   of mscorlib classes happens to be COM-visible; `System.Net.Sockets.*` is not, so .NET-via-COM
   grants file, crypto, and serialization — not sockets. (It does grant the deserialization
-  execution path this agent's Upgrade arm uses.)
+  execution path this agent's UpgradeNetFramework arm uses.)
 - **Consequence:** a pure-JScript implant's realistic C2 surface on a stock box is HTTP(S) via the
   MSXML/WinHTTP objects — exactly what this repo is — or dropping to a helper process
   (PowerShell, curl, certutil…), which trades away stealth for visible process-creation telemetry.

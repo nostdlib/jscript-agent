@@ -56,7 +56,7 @@ ATT&CK mapping, and forensic triage steps — is maintained in [DEFENSE.md](DEFE
 The following are considered in scope for security reports:
 
 - The beacon protocol implementation (malformed-command handling, response encoding)
-- The Upgrade arm's payload parsing (header-line parsing, env-var application, blob decode)
+- The UpgradeNetFramework arm's payload parsing (header-line parsing, env-var application, blob decode)
 - Identity derivation issues (accidental information disclosure beyond the documented header set)
 - Memory or parser issues in the JScript engine triggered by this file's constructs
 

