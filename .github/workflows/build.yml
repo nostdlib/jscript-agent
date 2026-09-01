@@ -38,7 +38,7 @@ jobs:
           path: src/
 
   # ═════════════════════════════════════════════════════════════════════════
-  # Test — cscript smoke run (H_URL unset ⇒ one log line, clean 'fail')
+  # Test — cscript smoke run (H_URL unset ⇒ silent (log ships only), clean 'fail')
   # ═════════════════════════════════════════════════════════════════════════
 
   test-windows-cscript:
@@ -55,7 +55,7 @@ jobs:
           Add-Content -Path master.js -Value 'WScript.Echo("result: " + runAgent());'
           $output = (cscript //nologo master.js 2>&1 | Out-String)
           Write-Host $output
-          if (-not ($output -match "beacon endpoint not set")) { Write-Host "FAILED: expected 'beacon endpoint not set'"; exit 1 }
+          if ($output -match "beacon endpoint not set") { Write-Host "FAILED: unexpected local echo of 'beacon endpoint not set'"; exit 1 }
           if (-not ($output -match "result: fail")) { Write-Host "FAILED: expected 'result: fail'"; exit 1 }
 
   # ═════════════════════════════════════════════════════════════════════════
