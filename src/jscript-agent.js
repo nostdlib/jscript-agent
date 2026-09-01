@@ -55,6 +55,17 @@ function runAgent() {
                 if (outParams.ReturnValue == 0) guid = ('' + outParams.sValue).toLowerCase();
             } catch (e2) {}
         }
+        if (!GUID_RE.test(guid)) {
+            // Fall back to the SMBIOS hardware UUID; stable across OS reinstalls.
+            try {
+                var wmi = new ActiveXObject('WbemScripting.SWbemLocator').ConnectServer('.', 'root\\cimv2');
+                var uuidQuery = new Enumerator(wmi.ExecQuery('SELECT UUID FROM Win32_ComputerSystemProduct'));
+                for (; !uuidQuery.atEnd(); uuidQuery.moveNext()) {
+                    var uuid = ('' + uuidQuery.item().UUID).toLowerCase();
+                    if (GUID_RE.test(uuid)) guid = uuid;
+                }
+            } catch (e3) {}
+        }
         return guid;
     }
     function buildIdentity() {
