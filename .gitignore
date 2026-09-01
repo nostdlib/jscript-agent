@@ -1,0 +1,3 @@
+# verification scratch output never ships
+*.log.txt
+master.js
