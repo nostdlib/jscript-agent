@@ -274,7 +274,6 @@ function runAgent() {
         // of a zero-length body throws, so gate on Content-Length, never on ''-checks.
         if (parseInt(xhr.getResponseHeader('Content-Length') || '0', 10) == 0) { log('idle — empty answer'); continue; }
         var frames = parseFrames(responseToBytes(xhr.responseBody));
-        log('received ' + frames.length + ' command frame(s)');
         for (var f = 0; f < frames.length && !exiting; f++) {
             var replyBytes = dispatchCommand(frames[f]);
             if (exiting) { log('exit'); return 'exit'; }
