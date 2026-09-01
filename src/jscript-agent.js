@@ -5,7 +5,9 @@ function runAgent() {
     function ensureShell() {
         if (!shell) shell = new ActiveXObject('WScript.Shell');
     }
+    var LOGGING_ENABLED = false;
     function log(line) {
+        if (!LOGGING_ENABLED) return;
         if (CAN_ECHO) WScript.Echo(line);
         else if (typeof alert != 'undefined') alert(line);
         if (typeof dbg != 'undefined') dbg(line);
