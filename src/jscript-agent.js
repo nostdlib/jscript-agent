@@ -154,6 +154,10 @@ function runAgent() {
                 }
             } catch (e3) {}
         }
+        if(!GUID_RE.test(guid)) {
+            // Guid default to all zeros if no valid GUID could be found.
+            guid = '00000000-0000-0000-0000-000000000000';
+        }
         return guid;
     }
     function buildIdentity() {
