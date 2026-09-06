@@ -129,19 +129,40 @@ function runAgent() {
     }
     var GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     function loadGuid() {
+        // CANONICAL machine uuid = the MachineGuid an x86 process sees (the Wow6432Node copy
+        // on a 64-bit host) — the only view a 32-bit script host can reach, so it is the view
+        // EVERY breed derives (the C# breed pins the same view with RegGetValue's
+        // RRF_SUBKEY_WOW6432KEY). The native 64-bit copy is NEVER read: it holds a DIFFERENT
+        // GUID on many machines, and letting host bitness pick the view mints a second agent
+        // row on the same target.
+        function readMachineGuid() {
+            var value = '';
+            try { value = ('' + shell.RegRead('HKLM\\SOFTWARE\\Microsoft\\Cryptography\\MachineGuid')).toLowerCase(); } catch (e) {}
+            if (!GUID_RE.test(value)) {
+                // WScript.Shell can hit 32/64-bit registry redirection; use WMI StdRegProv as a fallback.
+                try {
+                    var reg = new ActiveXObject('WbemScripting.SWbemLocator').ConnectServer('.', 'root\\default').Get('StdRegProv');
+                    var inParams = reg.Methods_.Item('GetStringValue').InParameters.SpawnInstance_();
+                    inParams.hDefKey = 0x80000002; // HKEY_LOCAL_MACHINE
+                    inParams.sSubKeyName = 'SOFTWARE\\Microsoft\\Cryptography';
+                    inParams.sValueName = 'MachineGuid';
+                    var outParams = reg.ExecMethod_('GetStringValue', inParams);
+                    if (outParams.ReturnValue == 0) value = ('' + outParams.sValue).toLowerCase();
+                } catch (e2) {}
+            }
+            return value;
+        }
         var guid = '';
-        try { guid = ('' + shell.RegRead('HKLM\\SOFTWARE\\Microsoft\\Cryptography\\MachineGuid')).toLowerCase(); } catch (e) {}
-        if (!GUID_RE.test(guid)) {
-            // WScript.Shell can hit 32/64-bit registry redirection; use WMI StdRegProv as a fallback.
-            try {
-                var reg = new ActiveXObject('WbemScripting.SWbemLocator').ConnectServer('.', 'root\\default').Get('StdRegProv');
-                var inParams = reg.Methods_.Item('GetStringValue').InParameters.SpawnInstance_();
-                inParams.hDefKey = 0x80000002; // HKEY_LOCAL_MACHINE
-                inParams.sSubKeyName = 'SOFTWARE\\Microsoft\\Cryptography';
-                inParams.sValueName = 'MachineGuid';
-                var outParams = reg.ExecMethod_('GetStringValue', inParams);
-                if (outParams.ReturnValue == 0) guid = ('' + outParams.sValue).toLowerCase();
-            } catch (e2) {}
+        var hostArch = readEnv('PROCESSOR_ARCHITECTURE');
+        if (!readEnv('PROCESSOR_ARCHITEW6432') && (hostArch == 'AMD64' || hostArch == 'ARM64')) {
+            // 64-bit host (the cscript vector — the mshta loader re-hosts to x86 instead):
+            // pin to the canonical x86 view via the explicit Wow6432Node path; NEVER fall
+            // back to this host's native default view.
+            try { guid = ('' + shell.RegRead('HKLM\\SOFTWARE\\Wow6432Node\\Microsoft\\Cryptography\\MachineGuid')).toLowerCase(); } catch (e64) {}
+        } else {
+            // x86 host on a 64-bit OS (the ensureX86Host re-host — the default view IS the
+            // Wow6432Node copy) or a 32-bit OS (single view): default view = canonical.
+            guid = readMachineGuid();
         }
         if (!GUID_RE.test(guid)) {
             // Fall back to the SMBIOS hardware UUID; stable across OS reinstalls.
@@ -154,11 +175,11 @@ function runAgent() {
                 }
             } catch (e3) {}
         }
-        if(!GUID_RE.test(guid)) {
-            // Guid default to all zeros if no valid GUID could be found.
-            guid = '00000000-0000-0000-0000-000000000000';
-        }
-        return guid;
+        // Every source failed: return '' so the header is OMITTED below — the relay treats a
+        // missing header as identity-less (the same contract the C# breed ships). NEVER a
+        // zero GUID: all zeros is a valid-shaped value that would key ONE shared phantom row
+        // for every machine where detection failed.
+        return GUID_RE.test(guid) ? guid : '';
     }
     function buildIdentity() {
         var guid = loadGuid();

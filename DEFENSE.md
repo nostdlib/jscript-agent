@@ -13,7 +13,9 @@ intended to run inside `mshta.exe` in deployment (a "master" wrapper sets `H_URL
 
 1. Reads the beacon endpoint from the `H_URL` environment variable ([:137](src/jscript-agent.js#L137)).
 2. Builds an identity header set once — hostname, username, OS version/build, CPU arch, and a UUID
-   taken from `HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid` ([:46-81](src/jscript-agent.js#L46-L81)).
+   taken from `HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid` as the x86 (Wow6432Node) registry
+   view sees it — the canonical per-machine value every breed derives, with the SMBIOS hardware
+   UUID as fallback ([:46-81](src/jscript-agent.js#L46-L81)).
 3. Long-poll POSTs the relay in a loop via `MSXML2.ServerXMLHTTP` ([:142-167](src/jscript-agent.js#L142-L167)).
 4. Dispatches one of three command opcodes: `0x0A` Exit, `0x0B` UpgradeNetFramework — in-process payload
    execution via `BinaryFormatter` insecure deserialization ([:90-134](src/jscript-agent.js#L90-L134)) —
@@ -32,7 +34,7 @@ several constant values ([:67-81](src/jscript-agent.js#L67-L81)):
 | Header | Value |
 |---|---|
 | `X-Agent-Api-Version` | always `1` |
-| `X-Agent-Machine-Uuid` | target's `MachineGuid` (one per machine) — omitted when undetectable |
+| `X-Agent-Machine-Uuid` | target's `MachineGuid` **through the x86/32-bit registry view** (the Wow6432Node copy on 64-bit hosts — the canonical one-value-per-machine identity every breed derives; SMBIOS UUID as fallback) — omitted when undetectable |
 | `X-Agent-Hostname` / `X-Agent-Username` | from the environment — leaks host + user identity on every request |
 | `X-Agent-Platform` | always `Windows` |
 | `X-Agent-Name-Id` | always `1` |
