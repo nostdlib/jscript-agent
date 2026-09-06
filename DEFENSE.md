@@ -35,6 +35,7 @@ several constant values ([:67-81](src/jscript-agent.js#L67-L81)):
 |---|---|
 | `X-Agent-Api-Version` | always `1` |
 | `X-Agent-Machine-Uuid` | target's `MachineGuid` **through the x86/32-bit registry view** (the Wow6432Node copy on 64-bit hosts — the canonical one-value-per-machine identity every breed derives; SMBIOS UUID as fallback) — omitted when undetectable |
+| `X-Agent-Session-Key` | a RANDOM per-runtime GUID (`Scriptlet.TypeLib`, `Math.random` fallback) — fresh each process launch, lets the operator tell runtimes apart on one machine (an upgrade handover swaps it); identifies, authorizes nothing |
 | `X-Agent-Hostname` / `X-Agent-Username` | from the environment — leaks host + user identity on every request |
 | `X-Agent-Platform` | always `Windows` |
 | `X-Agent-Name-Id` | always `1` |
