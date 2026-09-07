@@ -7,8 +7,10 @@ requirement, and no bitness constraint of its own.
 
 It is pure ES3-era JScript (the engine inside `mshta.exe` / `cscript.exe`, JScript 5.8) — no
 `XMLHttpRequest` host object assumptions, no JSON, no `let`/arrow functions. Every COM object it
-touches (`WScript.Shell`, `MSXML2.ServerXMLHTTP`, `WbemScripting.SWbemLocator`,
-`System.*` for the UpgradeNetFramework arm) is activated through `ActiveXObject`.
+touches (`WScript.Shell`, `WinHttp.WinHttpRequest.5.1` for the beacon, `WbemScripting.SWbemLocator`,
+`System.*` for the UpgradeNetFramework arm) is activated through `ActiveXObject`. The beacon
+transport is winhttp.dll's own object — no MSXML in the network path — because hardened boxes can
+deny the MSXML HTTP classes at `open()` with 0x80070005 "Access is denied".
 
 ## Environment contract
 

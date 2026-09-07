@@ -11,14 +11,17 @@ The agent is a single ES3 JScript function (`runAgent`, [src/jscript-agent.js:1]
 intended to run inside `mshta.exe` in deployment (a "master" wrapper sets `H_URL` and calls it) or
 `cscript.exe` for verification. In steady state it:
 
-1. Reads the beacon endpoint from the `H_URL` environment variable ([:137](src/jscript-agent.js#L137)).
+1. Reads the beacon endpoint from the `H_URL` environment variable ([:329](src/jscript-agent.js#L329)).
 2. Builds an identity header set once — hostname, username, OS version/build, CPU arch, and a UUID
    taken from `HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid` as the x86 (Wow6432Node) registry
    view sees it — the canonical per-machine value every breed derives, with the SMBIOS hardware
-   UUID as fallback ([:46-81](src/jscript-agent.js#L46-L81)).
-3. Long-poll POSTs the relay in a loop via `MSXML2.ServerXMLHTTP` ([:142-167](src/jscript-agent.js#L142-L167)).
+   UUID as fallback ([:149-201](src/jscript-agent.js#L149-L201)).
+3. Long-poll POSTs the relay in a loop via `WinHttp.WinHttpRequest.5.1` — winhttp.dll's own COM
+   object, no MSXML in the path, chosen precisely because hardened boxes deny the MSXML HTTP
+   classes at `open()` with 0x80070005 ([:43-58](src/jscript-agent.js#L43-L58),
+   loop at [:336-369](src/jscript-agent.js#L336-L369)).
 4. Dispatches one of three command opcodes: `0x0A` Exit, `0x0B` UpgradeNetFramework — in-process payload
-   execution via `BinaryFormatter` insecure deserialization ([:90-134](src/jscript-agent.js#L90-L134)) —
+   execution via `BinaryFormatter` insecure deserialization ([:282-324](src/jscript-agent.js#L282-L324)) —
    and anything else returns u32 `2`.
 
 The agent itself writes nothing to disk and creates no processes — persistence and window
@@ -93,19 +96,19 @@ hosted CLR is a strong anomaly unless the box legitimately runs script-driven .N
 **AMSI content (Win10+).** The JScript engine inside mshta/cscript feeds script source to AMSI.
 Unobfuscated copies of this file match on any of: `X-Agent-Capabilities`,
 `System.Runtime.Serialization.Formatters.Binary.BinaryFormatter`, `COMPLUS_Version`, `H_URL`,
-`WbemScripting.SWbemLocator` + `MSXML2.ServerXMLHTTP` together. (Per SECURITY.md scope, evasion
+`WbemScripting.SWbemLocator` + `WinHttp.WinHttpRequest.5.1` together. (Per SECURITY.md scope, evasion
 quality is the consuming C2's concern — treat obfuscated variants as expected.)
 
 **Registry (EID 10 if configured for reads).** Read of
-`HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid` by a script host ([:48](src/jscript-agent.js#L48)).
+`HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid` by a script host ([:158](src/jscript-agent.js#L158)).
 
 **WMI.** `SELECT Version, BuildNumber FROM Win32_OperatingSystem` and
-`SELECT Architecture FROM Win32_Processor` issued from mshta/cscript ([:57-61](src/jscript-agent.js#L57-L61)) —
+`SELECT Architecture FROM Win32_Processor` issued from mshta/cscript ([:234-236](src/jscript-agent.js#L234-L236)) —
 host inventory from a script host is itself a signal, independent of the C2.
 
 **Process environment (forensics).** The live process env block should contain `H_URL`
-([:137](src/jscript-agent.js#L137)) and, after an UpgradeNetFramework, `COMPLUS_Version` = `v2.0.50727`
-(Win7 / build 7600–7601) or `v4.0.30319` ([:64-66](src/jscript-agent.js#L64-L66), [:106](src/jscript-agent.js#L106)).
+([:329](src/jscript-agent.js#L329)) and, after an UpgradeNetFramework, `COMPLUS_Version` = `v2.0.50727`
+(Win7 / build 7600–7601) or `v4.0.30319` ([:241](src/jscript-agent.js#L241), [:297](src/jscript-agent.js#L297)).
 These are per-process and invisible to default telemetry — grab them from a memory dump or
 `Get-Process ... | % { $_.StartInfo.EnvironmentVariables }`-style collection before the process dies.
 
@@ -115,7 +118,7 @@ These are per-process and invisible to default telemetry — grab them from a me
 rule JScript_Agent_Beacon
 {
     strings:
-        $http = "MSXML2.ServerXMLHTTP" ascii
+        $http = "WinHttp.WinHttpRequest.5.1" ascii
         $hdr  = "X-Agent-Capabilities" ascii
         $fmt  = "System.Runtime.Serialization.Formatters.Binary.BinaryFormatter" ascii
         $env  = "COMPLUS_Version" ascii
@@ -131,8 +134,8 @@ rule JScript_Agent_Beacon
 |---|---|
 | T1059.007 JavaScript / JScript | The whole implant; runs under mshta (deploy) / cscript (verify) |
 | T1218.005 mshta | Host master runs a polyglot under mshta incl. the SysWOW64 x86 re-host |
-| T1071.001 Web Protocols | HTTP(S) long-poll beacon via ServerXMLHTTP (WinHTTP-backed) |
-| T1132.001 Data Encoding: Hex | Both command and reply bodies are hex strings |
+| T1071.001 Web Protocols | HTTP(S) long-poll beacon via `WinHttp.WinHttpRequest.5.1` (WinHTTP-backed) |
+| T1132.001 Data Encoding | Command and reply bodies are raw binary frame streams (no encoding negotiation) |
 | T1012 Query Registry | `MachineGuid` read for `X-Agent-Machine-Uuid` |
 | T1082 System Information Discovery | WMI OS-version and CPU-arch queries |
 | T1041 Exfiltration Over C2 Channel | Command replies returned in beacon POST bodies |
@@ -157,11 +160,14 @@ next escalation step must look like:
 
 - **The language has no I/O at all.** JScript 5.8 (ES3) inside WSH/mshta exposes no networking,
   filesystem, or process primitives in the language itself — every capability is COM automation
-  through `ActiveXObject`. Even `JSON` is absent, which is why this protocol speaks hex.
+  through `ActiveXObject`. Even `JSON` is absent, which is why the wire speaks raw binary frames
+  built through the `ADODB.Stream` COM bridge instead of any text encoding.
 - **No `XMLHttpRequest`.** That is a browser/DOM host object; WSH does not provide it. The stock
-  HTTP channels are the MSXML family (`MSXML2.ServerXMLHTTP`, used here) and
-  `WinHttp.WinHttpRequest.5.1` — both backed by WinHTTP, which has its own proxy settings
-  (not IE's), which is why the agent explicitly pins direct egress.
+  HTTP channels are the MSXML family (`MSXML2.ServerXMLHTTP` / `.6.0`) and
+  `WinHttp.WinHttpRequest.5.1` — all backed by WinHTTP, which has its own proxy settings
+  (not IE's). The agent uses the WinHttpRequest object directly: it puts no MSXML DLL in the
+  network path, which sidesteps both the IE-zone denials plain XMLHTTP suffers and the
+  hardening hooks that deny the MSXML classes on some boxes.
 - **No raw TCP/UDP.** There is no intrinsic socket API, and the only scriptable in-box socket
   wrapper — the VB6-era Winsock control (`MSWinsock.Winsock`, `mswinsck.ocx`) — is 32-bit-only,
   deprecated, and not shipped or registered on modern Windows. Practically unavailable.
@@ -174,8 +180,9 @@ next escalation step must look like:
   (PowerShell, curl, certutil…), which trades away stealth for visible process-creation telemetry.
 
 **Escalation watch-list** — each item is "the implant outgrew JScript" and worth an alert on its
-own: `WinHttp.WinHttpRequest` activation from script hosts; any appearance/registration of
-`mswinsck.ocx`; script hosts spawning network-capable helpers; CLR load inside a script host.
+own: any appearance/registration of `mswinsck.ocx`; script hosts spawning network-capable helpers
+(PowerShell, curl, certutil); CLR load inside a script host. (`WinHttp.WinHttpRequest` activation
+from a script host is NOT an escalation marker — it IS this agent's baseline beacon transport.)
 
 ## 7. Fingerprint checklist — verify in *your* environment
 
