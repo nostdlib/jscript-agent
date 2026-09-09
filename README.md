@@ -69,12 +69,17 @@ Spoken against the HTTP relay (see the `http-relay` worker — the beacon leg an
 - **Failure is fatal**: a non-200 status or a POST exception logs once and returns `'fail'` — no
   retry loop, no sleep primitive. Presence is re-established by re-delivery (e.g. on-logon
   persistence), not by the process burning CPU against a dead relay.
+- **The drive is recursive, not looped**: the beacon cycle tail-calls itself (no `while`/`for`
+  drives the session, and WinHttpRequest's completion events are vtable-only — unsinkable from
+  JScript). JScript has no tail-call optimization, so the engine's call stack bounds a session to
+  roughly 1000+ cycles — hours at the standard hold; exhaustion is caught and returns `'fail'`
+  like any other fatal end.
 
 ### Commands
 
 | Opcode | Command | Behavior |
 |---|---|---|
-| `0x0A` | Exit | Sets the exit flag; the loop unwinds and `runAgent()` returns `'exit'`. |
+| `0x0A` | Exit | The beacon driver intercepts the opcode before dispatch, logs once, and `runAgent()` returns `'exit'`. |
 | `0x0B` | UpgradeNetFramework | Re-arms the process in place. Payload (ASCII text after the opcode): `!d=`/`!e=` control lines, `NAME=value` env-var lines, a blank line, then `stage1b64\nblobB64`. The agent pins `COMPLUS_Version` itself first (v2.0.50727 on Win7 / build 7600-7601, else v4.0.30319 — the same OS rule the C2 gadget compiler uses), applies the env lines, optionally deserializes the stage-1 blob, then deserializes the main gadget blob (plain drive, or script-driven delegate chain when `!d=1` + entry via `!e=`). Replies u32 as hex: `0` = chain completed, `1` = failed (log carries the message). |
 | other | unknown | Replies u32 `2`. |
 
