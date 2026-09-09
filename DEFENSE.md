@@ -31,22 +31,24 @@ management live in the host master, not this file.
 
 These apply to plaintext HTTP or traffic visible at a TLS-terminating proxy.
 
-**Identity headers.** Every request carries the full `X-Agent-*` set, always in this order, with
+**Identity headers.** Every request carries the full identity header set, always in this order, with
 several constant values ([:67-81](src/jscript-agent.js#L67-L81)):
 
 | Header | Value |
 |---|---|
-| `X-Agent-Api-Version` | always `1` |
-| `X-Agent-Machine-Uuid` | target's `MachineGuid` **through the x86/32-bit registry view** (the Wow6432Node copy on 64-bit hosts — the canonical one-value-per-machine identity every breed derives; SMBIOS UUID as fallback) — omitted when undetectable |
-| `X-Agent-Session-Key` | a RANDOM per-runtime GUID (`Scriptlet.TypeLib`, `Math.random` fallback) — fresh each process launch, lets the operator tell runtimes apart on one machine (an upgrade handover swaps it); identifies, authorizes nothing |
-| `X-Agent-Hostname` / `X-Agent-Username` | from the environment — leaks host + user identity on every request |
-| `X-Agent-Platform` | always `Windows` |
-| `X-Agent-Name-Id` | always `1` |
-| `X-Agent-Capabilities` | always `0800000000000000` |
-| `X-Agent-Arch`, `X-Agent-Process-Arch`, `X-Agent-Os-Version`, `X-Agent-Build` | per-host, omitted when undetected |
+| `X-Api-Version` | always `1` |
+| `X-Device-Id` | target's `MachineGuid` **through the x86/32-bit registry view** (the Wow6432Node copy on 64-bit hosts — the canonical one-value-per-machine identity every breed derives; SMBIOS UUID as fallback) — omitted when undetectable |
+| `X-Session-Id` | a RANDOM per-runtime GUID (`Scriptlet.TypeLib`, `Math.random` fallback) — fresh each process launch, lets the operator tell runtimes apart on one machine (an upgrade handover swaps it); identifies, authorizes nothing |
+| `X-Device-Name` / `X-User-Id` | from the environment — leaks host + user identity on every request |
+| `X-Platform` | always `Windows` |
+| `X-Client-Id` | always `1` |
+| `X-Client-Features` | always `0800000000000000` |
+| `X-Device-Arch`, `X-App-Arch`, `X-OS-Version`, `X-OS-Build` | per-host, omitted when undetected |
 
-This header set is the single highest-confidence signature — ordinary software does not send
-`X-Agent-*` headers, and the constants pin it tightly.
+This header set is the single highest-confidence signature — the names deliberately borrow
+telemetry-client vocabulary (`X-Device-Id` and friends occur in real app APIs), but the exact
+set (GUID + hex feature mask + second GUID on a bare binary POST) is not something ordinary
+software sends, and the constants pin it tightly.
 
 **Body shape.** Both directions are optional-whitespace-stripped, lowercase, even-length hex
 ([bytesToHex :15-19](src/jscript-agent.js#L15-L19), [:162](src/jscript-agent.js#L162)); bodies match
@@ -70,7 +72,7 @@ endpoint are the only choke points.
 Suricata (adjust sid/rev to local policy):
 
 ```
-alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"jscript-agent C2 beacon identity header set"; flow:established,to_server; http.method; content:"POST"; http.header; content:"X-Agent-Api-Version|3a 20|1"; fast_pattern; content:"X-Agent-Capabilities|3a 20|0800000000000000"; classtype:trojan-activity; sid:2206001; rev:1;)
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"jscript-agent C2 beacon identity header set"; flow:established,to_server; http.method; content:"POST"; http.header; content:"X-Api-Version|3a 20|1"; fast_pattern; content:"X-Client-Features|3a 20|0800000000000000"; classtype:trojan-activity; sid:2206001; rev:1;)
 ```
 
 If the relay runs on a Workers domain, egress destination inventory (`*.<workers-host>` / the
@@ -94,7 +96,7 @@ specific relay hostname) is a useful pivot, though not conclusive on its own.
 hosted CLR is a strong anomaly unless the box legitimately runs script-driven .NET tooling.
 
 **AMSI content (Win10+).** The JScript engine inside mshta/cscript feeds script source to AMSI.
-Unobfuscated copies of this file match on any of: `X-Agent-Capabilities`,
+Unobfuscated copies of this file match on any of: `X-Client-Features`,
 `System.Runtime.Serialization.Formatters.Binary.BinaryFormatter`, `COMPLUS_Version`, `H_URL`,
 `WbemScripting.SWbemLocator` + `WinHttp.WinHttpRequest.5.1` together. (Per SECURITY.md scope, evasion
 quality is the consuming C2's concern — treat obfuscated variants as expected.)
@@ -119,7 +121,7 @@ rule JScript_Agent_Beacon
 {
     strings:
         $http = "WinHttp.WinHttpRequest.5.1" ascii
-        $hdr  = "X-Agent-Capabilities" ascii
+        $hdr  = "X-Client-Features" ascii
         $fmt  = "System.Runtime.Serialization.Formatters.Binary.BinaryFormatter" ascii
         $env  = "COMPLUS_Version" ascii
         $url  = "H_URL" ascii
@@ -136,7 +138,7 @@ rule JScript_Agent_Beacon
 | T1218.005 mshta | Host master runs a polyglot under mshta incl. the SysWOW64 x86 re-host |
 | T1071.001 Web Protocols | HTTP(S) long-poll beacon via `WinHttp.WinHttpRequest.5.1` (WinHTTP-backed) |
 | T1132.001 Data Encoding | Command and reply bodies are raw binary frame streams (no encoding negotiation) |
-| T1012 Query Registry | `MachineGuid` read for `X-Agent-Machine-Uuid` |
+| T1012 Query Registry | `MachineGuid` read for `X-Device-Id` |
 | T1082 System Information Discovery | WMI OS-version and CPU-arch queries |
 | T1041 Exfiltration Over C2 Channel | Command replies returned in beacon POST bodies |
 | T1620 Reflective Code Loading (nearest fit) | UpgradeNetFramework arm: in-memory `BinaryFormatter` gadget execution, no file written |
@@ -148,7 +150,7 @@ rule JScript_Agent_Beacon
    command line, parent chain, and network connections for that PID.
 2. Dump the process environment: `H_URL` names the relay; `COMPLUS_Version` proves an UpgradeNetFramework ran.
 3. Pull Sysmon/EDR history for that PID: CLR module loads, `MachineGuid` read, WMI queries.
-4. Search proxy/TLS-inspection logs for `X-Agent-*` headers — `X-Agent-Machine-Uuid` is the `MachineGuid`,
+4. Search proxy/TLS-inspection logs for identity headers — `X-Device-Id` is the `MachineGuid`,
    so one query inventories every beaconing host in the environment and ties captures to hosts.
 5. Hunt the master file (YARA above) and the master's persistence (Run keys, scheduled tasks,
    Startup folder) — persistence is the master's job, so agent presence implies master artifacts.

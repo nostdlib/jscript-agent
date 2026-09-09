@@ -21,7 +21,7 @@ The agent carries **no baked configuration**. Its single input is the process en
 | `H_URL` | The beacon endpoint — the HTTP relay root (`https://<relay>/`). Empty or unset ⇒ the agent logs once and returns `'fail'`. |
 
 Everything else (identity, machine architecture, OS version) is derived on the target at runtime.
-`X-Agent-Capabilities` always ships `0800000000000000` (the
+`X-Client-Features` always ships `0800000000000000` (the
 `ExploitInsecureDeserialization` bit, category 3) — every build of this agent carries
 the UpgradeNetFramework arm.
 
@@ -72,7 +72,7 @@ process; the pure beacon loop runs in any bitness (and standalone under cscript)
 
 Spoken against the HTTP relay (see the `http-relay` worker — the beacon leg answers at its root):
 
-- **POST** to `H_URL` with the full `X-Agent-*` identity set (API 1) on every request; body =
+- **POST** to `H_URL` with the full identity header set (API 1) on every request; body =
   hex(previous command's response), empty body when none is pending.
 - **Every successful answer is `200 text/plain`**: body = hex(next command) in the shared binary
   protocol (`[opcode][payload]`), empty body = nothing queued. There is no 204; any non-200 is
@@ -102,7 +102,7 @@ cscript //nologo some-master.js    # a master that sets H_URL, defines dbg, call
 
 Expected: with `H_URL` unset, one `beacon endpoint not set` line and a clean exit; against a live
 relay (`wrangler dev` in the `http-relay` repo), the beacon appears in `/status` with its parsed
-`X-Agent-*` identity and answers queued commands.
+identity and answers queued commands.
 
 ## For defenders
 
